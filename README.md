@@ -47,7 +47,7 @@ If none of these are present, make sure to set the environment variable before s
 set CUDA_ROOT=CUDA_INSTALLATION_PATH
 
 1. Open a Command Line (cmd.exe)
-2. Clone the vLLM repository: ```cd C:\ & git clone https://github.com/SystemPanic/vllm-windows.git```
+2. **Clone the vLLM for Windows repository from vllm-for-windows branch (NOT MAIN): ```cd C:\ & git clone --single-branch --branch vllm-for-windows https://github.com/SystemPanic/vllm-windows.git```**
 3. Execute (in cmd) ```VISUAL_STUDIO_INSTALL_PATH\VC\Auxiliary\Build\vcvarsall.bat x64```
 4. Change the working directory to the cloned repository path, for example: ```cd C:\vllm-windows```
 5. Set the following environment variables:
