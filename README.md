@@ -19,6 +19,83 @@ Join us at the [PyTorch Conference, October 22-23](https://events.linuxfoundatio
 
 ---
 
+## vLLM for Windows
+
+vLLM for Windows build & kernels. This repository will be updated when new versions of vLLM are released.
+
+**Don't open a new Issue to request a specific commit build. Wait for a new stable release.**
+
+**Don't open Issues for general vLLM questions or non Windows related problems. Only Windows specific issues.** Any Issue opened that is not Windows specific will be closed automatically.
+
+**Don't request a wheel for your specific environment.** If your environment does not match the released wheel, build your own wheel from source by following the [instructions below](https://github.com/SystemPanic/vllm-windows?tab=readme-ov-file#building-from-source).
+
+### Windows instructions:
+
+#### Installing an existing release wheel:
+
+1. Ensure that you have the correct Python, Torch and CUDA version of the wheel. The Python, Torch and CUDA version of the wheel is specified in the release version.
+2. Download the wheel from the release version of your preference (latest wheel [here](https://github.com/SystemPanic/vllm-windows/releases/latest)).
+3. Install it with ```pip install DOWNLOADED_WHEEL_PATH```
+
+#### Building from source:
+
+A Visual Studio 2019 or newer is required to launch the compiler x64 environment. The installation path is referred in the instructions as VISUAL_STUDIO_INSTALL_PATH.
+
+CUDA path will be found automatically if you have the bin folder in your PATH, or have the CUDA installation path settled on well-known environment vars like CUDA_ROOT, CUDA_HOME or CUDA_PATH.
+
+If none of these are present, make sure to set the environment variable before starting the build:
+set CUDA_ROOT=CUDA_INSTALLATION_PATH
+
+1. Open a Command Line (cmd.exe)
+2. Clone the vLLM repository: ```cd C:\ & git clone https://github.com/SystemPanic/vllm-windows.git```
+3. Execute (in cmd) ```VISUAL_STUDIO_INSTALL_PATH\VC\Auxiliary\Build\vcvarsall.bat x64```
+4. Change the working directory to the cloned repository path, for example: ```cd C:\vllm-windows```
+5. Set the following environment variables:
+
+```
+set DISTUTILS_USE_SDK=1
+set VLLM_TARGET_DEVICE=cuda
+#(replace 10 with your desired cpu threads to use in parallel to speed up compilation)
+set MAX_JOBS=10
+
+#Optional variables:
+
+#To include cuDSS (only if you have cuDSS installed)
+set USE_CUDSS=1
+set CUDSS_LIBRARY_PATH=PATH_TO_CUDSS_INSTALL_DIR\lib\12
+set CUDSS_INCLUDE_PATH=PATH_TO_CUDSS_INSTALL_DIR\include
+
+#To include cuSPARSELt (only if you have cuSPARSELt installed)
+set USE_CUSPARSELT=1
+set CUSPARSELT_INCLUDE_PATH=PATH_TO_CUSPARSELT_INSTALL_DIR\include
+set CUSPARSELT_LIBRARY_PATH=PATH_TO_CUSPARSELT_INSTALL_DIR\lib
+
+#To include cuDNN:
+set USE_CUDNN=1
+set CUDNN_LIBRARY_PATH=PATH_TO_CUDNN_INSTALL_DIR\lib\CUDNN_CUDA_VERSION\x64
+set CUDNN_INCLUDE_PATH=PATH_TO_CUDNN_INSTALL_DIR\include\CUDNN_CUDA_VERSION
+
+#Flash Attention v3 build has been disabled inside WSL2 and Windows due to compiler being killed on WSL2, and extremely long compiling times on Windows. Hopper is not available on Windows, so FA3 has no sense anyway. 
+#Build can be forcefully enabled using the following environment var:
+set VLLM_FORCE_FA3_WINDOWS_BUILD=1
+
+```
+6. Build & install:
+```
+#With torch 2.7.1 cuda 12.6 (change cu126 with your installed CUDA version)
+pip install torch==2.7.1+cu126 torchaudio==2.7.1+cu126 torchvision==0.22.1+cu126 --index-url https://download.pytorch.org/whl/cu126
+
+#With your already installed torch cuda version (make sure you have torch cuda installed if you use a virtual environment)
+python use_existing_torch.py
+
+pip install -r requirements/build.txt
+pip install -r requirements/windows.txt
+pip install . --no-build-isolation
+
+```
+
+---
+
 *Latest News* 🔥
 
 - [2025/11] We hosted [the first vLLM Europe Meetup in Zurich](https://luma.com/0gls27kb) focused on quantization, distributed inference, and reinforcement learning at scale with speakers from Mistral, IBM, and Red Hat. Please find the meetup slides [here](https://docs.google.com/presentation/d/1UC9PTLCHYXQpOmJDSFg6Sljra3iVXzc09DeEI7dnxMc/edit?usp=sharing) and recording [here](https://www.youtube.com/watch?v=6m6ZE6yVEDI)
