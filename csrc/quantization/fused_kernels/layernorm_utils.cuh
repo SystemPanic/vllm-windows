@@ -76,7 +76,7 @@ __device__ void compute_dynamic_per_token_scales(
     int32_t const hidden_size, scalar_t const* __restrict__ residual = nullptr,
     int32_t const group_size = 0) {
   float block_absmax_val_maybe = 0.0f;
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>};
+  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>::val()};
   __syncthreads();
   if (group_size > 0) {
     __shared__ float s_max_vals[1024];
@@ -288,7 +288,7 @@ __device__ void compute_dynamic_per_token_scales(
     float const rms, float const* __restrict__ scale_ub,
     int32_t const hidden_size,
     scalar_t const* __restrict__ residual = nullptr) {
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>};
+  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>::val()};
 
   const int VEC_SIZE = 4;
   float block_absmax_val_maybe = 0.0f;

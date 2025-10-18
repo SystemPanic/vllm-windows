@@ -56,6 +56,10 @@ extern "C" {
 
 #include <sys/types.h>
 
+#ifndef ssize_t
+  #define ssize_t ptrdiff_t
+#endif
+
 char error_msg[10240];  // 10KB buffer to store error messages
 CUresult no_error = CUresult(0);
 CUresult error_code = no_error;  // store error code

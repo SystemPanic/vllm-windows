@@ -34,6 +34,14 @@ typedef __hip_fp8x4_e4m3_fnuz __nv_fp8x4_e4m3;
 #endif
 
 #include "core/registration.h"
+
+#ifdef _MSC_VER
+  #include <cstdint>
+  using int128_t = int4;  // int4 is 128 bits in CUDA
+#else
+  using int128_t = __int128_t;
+#endif
+
 namespace vllm {
 
 template <typename T>
@@ -216,9 +224,9 @@ constexpr __nv_bfloat16 get_fp8_max() {
   static_assert(std::is_same_v<T, c10::Float8_e4m3fn> ||
                 std::is_same_v<T, c10::Float8_e4m3fnuz>);
   if constexpr (std::is_same_v<T, c10::Float8_e4m3fn>) {
-    return __nv_bfloat16(__nv_bfloat16_raw{.x = 17376});
+    return __nv_bfloat16(__nv_bfloat16_raw{17376});
   } else {
-    return __nv_bfloat16(__nv_bfloat16_raw{.x = 17264});
+    return __nv_bfloat16(__nv_bfloat16_raw{17264});
   }
 }
 
@@ -227,9 +235,9 @@ constexpr __nv_bfloat16 get_fp8_min() {
   static_assert(std::is_same_v<T, c10::Float8_e4m3fn> ||
                 std::is_same_v<T, c10::Float8_e4m3fnuz>);
   if constexpr (std::is_same_v<T, c10::Float8_e4m3fn>) {
-    return __nv_bfloat16(__nv_bfloat16_raw{.x = 50144});
+    return __nv_bfloat16(__nv_bfloat16_raw{50144});
   } else {
-    return __nv_bfloat16(__nv_bfloat16_raw{.x = 50032});
+    return __nv_bfloat16(__nv_bfloat16_raw{50032});
   }
 }
 
@@ -299,7 +307,7 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   static constexpr int COMPUTE_STAGE_SIZE = 2 * GROUP_SIZE / 4;
   static constexpr int COMPUTE_STAGE_MOD = COMPUTE_STAGE_SIZE * NUM_STAGES;
 
-  extern __shared__ __align__(16) __int128_t smem_128[];
+  extern __shared__ __align__(16) int128_t smem_128[];
 
   int* s_expert_offsets =
       reinterpret_cast<int*>(smem_128 + (SMEM_SIZE_BYTES_Y / 16));
@@ -307,7 +315,7 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   static constexpr __nv_bfloat16 fp8_min = get_fp8_min<fp8_type>();
   static constexpr __nv_bfloat16 fp8_max = get_fp8_max<fp8_type>();
   // We assign EPS with it's 16-bit unsigned counterpart to allow constexpr.
-  static constexpr __nv_bfloat16 EPS = (__nv_bfloat16_raw{.x = 11996});
+  static constexpr __nv_bfloat16 EPS = (__nv_bfloat16_raw{11996});
   int tid = threadIdx.x;
   int warp_id = tid >> 5;
   int lane_id = tid & 0x1f;
@@ -351,8 +359,8 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   // updiv(n_tokens, NUM_PARALLEL_TOKENS) for better scheduling.
 
   // Each warp will get space to store its hidden dim for gate and up.
-  __int128_t* s_hidden_load = smem_128 + warp_id * ((2 * 128 / 8) * NUM_STAGES);
-  __int128_t* smem_load_ptr = s_hidden_load + lane_id;
+  int128_t* s_hidden_load = smem_128 + warp_id * ((2 * 128 / 8) * NUM_STAGES);
+  int128_t* smem_load_ptr = s_hidden_load + lane_id;
 
   const __nv_bfloat16 fp8_inv = __hdiv(__float2bfloat16(1.f), fp8_max);
 
@@ -360,11 +368,11 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   int32_t load_stage_offset{};
   const __nv_bfloat16 one_bf16 = __float2bfloat16_rn(1.f);
 
-  __int64_t* smem_compute_ptr = reinterpret_cast<__int64_t*>(smem_128) +
+  int64_t* smem_compute_ptr = reinterpret_cast<int64_t*>(smem_128) +
                                 warp_id * (2 * (GROUP_SIZE / 4) * NUM_STAGES) +
                                 lane_id;
-  __int64_t* s_gate64_ptr = smem_compute_ptr;
-  __int64_t* s_up64_ptr = smem_compute_ptr + GROUP_SIZE / 4;
+  int64_t* s_gate64_ptr = smem_compute_ptr;
+  int64_t* s_up64_ptr = smem_compute_ptr + GROUP_SIZE / 4;
 
   int tokens_lower, tokens_upper;
 
@@ -391,10 +399,10 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   const Idx_t gate_warp_offset =
       warp_id * ((stride_i_h * H) / (8 * NUM_WARPS)) + (lane_id & 0b1111);
 
-  const __int128_t* input_128_ptr =
-      reinterpret_cast<const __int128_t*>(_input) + gate_warp_offset +
+  const int128_t* input_128_ptr =
+      reinterpret_cast<const int128_t*>(_input) + gate_warp_offset +
       ((lane_id < 16) ? 0 : ((H * stride_i_h) / 8));
-  __int128_t* load_ptr = const_cast<__int128_t*>(input_128_ptr + base_i);
+  int128_t* load_ptr = const_cast<int128_t*>(input_128_ptr + base_i);
 
   auto token_offset = token_id - expert_offset;
 
@@ -433,15 +441,15 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
 
         base_i = expert_id * (stride_i_e / 8);
         token_offset = 0;
-        load_ptr = const_cast<__int128_t*>(input_128_ptr + base_i);
+        load_ptr = const_cast<int128_t*>(input_128_ptr + base_i);
       } else {
         // We remain within the same expert, so just
-        // move by H/4 __int128_t (2 * H/8).
+        // move by H/4 int128_t (2 * H/8).
         base_i += stride_yq_t / 4;
         token_offset++;
       }
 
-      load_ptr = const_cast<__int128_t*>(input_128_ptr + base_i);
+      load_ptr = const_cast<int128_t*>(input_128_ptr + base_i);
 
       auto smem_load_ptr_staged = smem_load_ptr + load_stage_offset;
 
@@ -495,15 +503,15 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
       __syncthreads();
       load_and_advance_y_pred();
 
-      __int64_t* gate64_ptr = s_gate64_ptr + compute_pipeline_offset_64;
-      __int64_t* up64_ptr = s_up64_ptr + compute_pipeline_offset_64;
+      int64_t* gate64_ptr = s_gate64_ptr + compute_pipeline_offset_64;
+      int64_t* up64_ptr = s_up64_ptr + compute_pipeline_offset_64;
 
       // COMPUTE_STAGE_SIZE/MOD must also be constexpr!
       compute_pipeline_offset_64 += COMPUTE_STAGE_SIZE;
       compute_pipeline_offset_64 %= COMPUTE_STAGE_MOD;
 
-      __int64_t gate64 = *gate64_ptr;
-      __int64_t up64 = *up64_ptr;
+      int64_t gate64 = *gate64_ptr;
+      int64_t up64 = *up64_ptr;
 
       // Compute
       __nv_bfloat162 res[2];
