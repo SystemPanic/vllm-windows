@@ -13,6 +13,10 @@
     #include <c10/cuda/CUDAException.h>  // For C10_CUDA_CHECK and C10_CUDA_KERNEL_LAUNCH_CHECK
 #endif
 
+#ifdef _WIN32
+#include <math.h>
+#endif
+
 #ifndef USE_ROCM
     #include <cub/block/block_load.cuh>
     #include <cub/block/block_store.cuh>
@@ -24,6 +28,22 @@
 
 #include "selective_scan.h"
 #include "static_switch.h"
+
+// Helper function to set the maximum dynamic shared memory attribute.
+// This function is defined at file scope so that the preprocessor directives
+// are not embedded inside a lambda.
+template <typename KernelT>
+void set_max_dynamic_shared_memory(KernelT kernel, int kSmemSize) {
+    if (kSmemSize >= 48 * 1024) {
+#ifdef USE_ROCM
+		C10_HIP_CHECK(hipFuncSetAttribute(
+			reinterpret_cast<const void*>(kernel), hipFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+#else
+		C10_CUDA_CHECK(cudaFuncSetAttribute(
+			kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+#endif
+	}
+}
 
 template<int kNThreads_, int kNItems_, int kNRows_, bool kIsEvenLen_,
          bool kIsVariableB_, bool kIsVariableC_,
@@ -370,26 +390,19 @@ template<int kNThreads, int kNItems, typename input_t, typename weight_t, typena
 void selective_scan_fwd_launch(SSMParamsBase &params, cudaStream_t stream) {
     // Only kNRows == 1 is tested for now, which ofc doesn't differ from previously when we had each block
     // processing 1 row.
-    constexpr int kNRows = 1;
+    static constexpr int kNRows = 1;
     // kIsVariableB, kIsVariableC and kHasZ are all set to True to reduce binary size
-    constexpr bool kIsVariableB = true;
-    constexpr bool kIsVariableC = true;
+	static constexpr bool kIsVariableB = true;
+    static constexpr bool kIsVariableC = true;
+    static constexpr bool kHasZ = true;
     BOOL_SWITCH(params.seqlen % (kNThreads * kNItems) == 0, kIsEvenLen, [&] {
         BOOL_SWITCH(params.z_ptr != nullptr , kHasZ, [&] {
             BOOL_SWITCH(params.query_start_loc_ptr != nullptr , kVarlen, [&] {
                 using Ktraits = Selective_Scan_fwd_kernel_traits<kNThreads, kNItems, kNRows, kIsEvenLen, kIsVariableB, kIsVariableC, kHasZ,  kVarlen, input_t, weight_t, state_t>;
-                constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
+                static constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
                 dim3 grid(params.batch, params.dim / kNRows);
                 auto kernel = &selective_scan_fwd_kernel<Ktraits>;
-                if (kSmemSize >= 48 * 1024) {
-#ifdef USE_ROCM
-                    C10_HIP_CHECK(hipFuncSetAttribute(
-                        reinterpret_cast<const void*>(kernel), hipFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
-#else
-                    C10_CUDA_CHECK(cudaFuncSetAttribute(
-                        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
-#endif
-                }
+                set_max_dynamic_shared_memory(kernel, kSmemSize);
                 kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
             });

@@ -30,6 +30,12 @@ endif()
 FetchContent_MakeAvailable(flashmla)
 message(STATUS "FlashMLA is available at ${flashmla_SOURCE_DIR}")
 
+if (WIN32)
+  find_package(PythonInterp)
+  find_package(Python)
+  execute_process(COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fix_cutlass_msvc.py ${flashmla_SOURCE_DIR})
+endif()
+
 # The FlashMLA kernels only work on hopper and require CUDA 12.3 or later.
 # Only build FlashMLA kernels if we are building for something compatible with 
 # sm90a

@@ -52,7 +52,7 @@ __device__ void compute_dynamic_per_token_scales(
     scalar_t const* __restrict__ residual = nullptr) {
   int64_t const token_offset = blockIdx.x * static_cast<int64_t>(hidden_size);
   ;
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>};
+  constexpr scalar_out_t qmax{quant_type_max<scalar_out_t>::val()};
 
   float block_absmax_val_maybe = 0.0f;
   for (auto i = threadIdx.x; i < hidden_size; i += blockDim.x) {
@@ -199,7 +199,7 @@ __device__ void compute_dynamic_per_token_scales(
         reinterpret_cast<vec4_t<scalar_t> const*>(&residual[token_offset]);
   }
 
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>};
+  constexpr scalar_out_t qmax{quant_type_max<scalar_out_t>::val()};
 
   const int VEC_SIZE = 4;
   int32_t const num_vec_elems = hidden_size >> 2;

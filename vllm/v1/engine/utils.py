@@ -3,6 +3,7 @@
 
 import contextlib
 import os
+import platform
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -797,16 +798,30 @@ def launch_core_engines(
     )
 
     # Set up input and output addresses.
-    addresses = EngineZmqAddresses(
-        inputs=[
-            get_engine_client_zmq_addr(client_local_only, host)
-            for _ in range(num_api_servers)
-        ],
-        outputs=[
-            get_engine_client_zmq_addr(client_local_only, host)
-            for _ in range(num_api_servers)
-        ],
-    )
+    if platform.system() == "Windows":
+        input_address_port = 45974
+        output_address_port = 45975
+        addresses = EngineZmqAddresses(
+            inputs=[
+                get_engine_client_zmq_addr(client_local_only, host, input_address_port - num_api_index)
+                for num_api_index in range(num_api_servers)
+            ],
+            outputs=[
+                get_engine_client_zmq_addr(client_local_only, host, output_address_port + num_api_index)
+                for num_api_index in range(num_api_servers)
+            ],
+        )
+    else:
+        addresses = EngineZmqAddresses(
+            inputs=[
+                get_engine_client_zmq_addr(client_local_only, host)
+                for _ in range(num_api_servers)
+            ],
+            outputs=[
+                get_engine_client_zmq_addr(client_local_only, host)
+                for _ in range(num_api_servers)
+            ],
+        )
 
     # Run the DP Coordinator process with rank 0 when in
     # online DP mode.
@@ -937,7 +952,7 @@ def wait_for_engine_startup(
         and not parallel_config.data_parallel_external_lb
     )
 
-    if proc_manager is not None:
+    if proc_manager is not None and platform.system() != "Windows":
         for sentinel in proc_manager.sentinels():
             poller.register(sentinel, zmq.POLLIN)
     if coord_process is not None:

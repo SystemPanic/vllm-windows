@@ -12,7 +12,16 @@ import warnings
 from typing import Any
 
 import torch
-import uvloop
+import platform
+if platform.system() == "Windows":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
@@ -707,7 +716,7 @@ def main(args: argparse.Namespace):
     request_outputs: list[RequestOutput] | None = None
     if args.backend == "vllm":
         if args.async_engine:
-            elapsed_time = uvloop.run(
+            elapsed_time = uvloop_impl.run(
                 run_vllm_async(
                     requests,
                     args.n,

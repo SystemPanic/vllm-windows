@@ -56,8 +56,8 @@ endif()
 # requirements.txt files and should be kept consistent.  The ROCm torch
 # versions are derived from docker/Dockerfile.rocm
 #
-set(TORCH_SUPPORTED_VERSION_CUDA "2.9.0")
-set(TORCH_SUPPORTED_VERSION_ROCM "2.9.0")
+set(TORCH_SUPPORTED_VERSION_CUDA "2.7.1")
+set(TORCH_SUPPORTED_VERSION_ROCM "2.7.1")
 
 #
 # Try to find python package with an executable that exactly matches
@@ -308,6 +308,28 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
 
   # Set CUTLASS_REVISION. Used for FetchContent. Also fixes some bogus messages when building.
   set(CUTLASS_REVISION "v4.2.1")
+  set(CUTLASS_ENABLE_CUBLAS ON CACHE BOOL "cuBLAS enabled for Cutlass")
+  set(CUBLAS_ENABLED ON CACHE BOOL "cuBLAS enabled")
+  if (WIN32)
+	list(APPEND VLLM_GPU_FLAGS "--disable-warnings")
+	list(APPEND VLLM_GPU_FLAGS "-O2")
+	list(APPEND VLLM_GPU_FLAGS "-FS")
+	list(APPEND VLLM_GPU_FLAGS "-Xptxas=-O2")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/O2")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/FS")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/Z7")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/Zc:__cplusplus")
+	string(REPLACE "/Zi" "/Z7" VLLM_GPU_FLAGS "${VLLM_GPU_FLAGS}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+	string(APPEND CMAKE_CXX_FLAGS "/Zc:__cplusplus")
+	set(CMAKE_CUDA_FLAGS_DEBUG "")
+  endif()
+>>>>>>> v0.11.1 RC
 
   # Use the specified CUTLASS source directory for compilation if VLLM_CUTLASS_SRC_DIR is provided
   if (DEFINED ENV{VLLM_CUTLASS_SRC_DIR})
@@ -321,7 +343,22 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
     message(STATUS "The VLLM_CUTLASS_SRC_DIR is set, using ${VLLM_CUTLASS_SRC_DIR} for compilation")
     FetchContent_Declare(cutlass SOURCE_DIR ${VLLM_CUTLASS_SRC_DIR})
   else()
-    FetchContent_Declare(
+    if (WIN32)
+	  FetchContent_Declare(
+        cutlass
+		# For Windows, use custom branch until Nvidia fixes Windows sm100 gemms in official repo. More info https://github.com/NVIDIA/cutlass/pull/2167
+        GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
+        # Please keep this in sync with CUTLASS_REVISION line above.
+		GIT_TAG ${CUTLASS_REVISION}
+        GIT_PROGRESS TRUE
+
+        # Speed up CUTLASS download by retrieving only the specified GIT_TAG instead of the history.
+        # Important: If GIT_SHALLOW is enabled then GIT_TAG works only with branch names and tags.
+        # So if the GIT_TAG above is updated to a commit hash, GIT_SHALLOW must be set to FALSE
+        GIT_SHALLOW TRUE
+      )
+	else()
+	  FetchContent_Declare(
         cutlass
         GIT_REPOSITORY https://github.com/nvidia/cutlass.git
         # Please keep this in sync with CUTLASS_REVISION line above.
@@ -332,7 +369,8 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
         # Important: If GIT_SHALLOW is enabled then GIT_TAG works only with branch names and tags.
         # So if the GIT_TAG above is updated to a commit hash, GIT_SHALLOW must be set to FALSE
         GIT_SHALLOW TRUE
-    )
+      )
+	endif()
   endif()
   FetchContent_MakeAvailable(cutlass)
 
@@ -883,17 +921,32 @@ if (VLLM_GPU_LANG STREQUAL "HIP")
 endif()
 
 message(STATUS "Enabling C extension.")
-define_extension_target(
-  _C
-  DESTINATION vllm
-  LANGUAGE ${VLLM_GPU_LANG}
-  SOURCES ${VLLM_EXT_SRC}
-  COMPILE_FLAGS ${VLLM_GPU_FLAGS}
-  ARCHITECTURES ${VLLM_GPU_ARCHES}
-  INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR}
-  INCLUDE_DIRECTORIES ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
-  USE_SABI 3
-  WITH_SOABI)
+if (DEFINED _CUBLAS_LIBRARY)
+  define_extension_target(
+    _C
+    DESTINATION vllm
+    LANGUAGE ${VLLM_GPU_LANG}
+    SOURCES ${VLLM_EXT_SRC}
+    COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+    ARCHITECTURES ${VLLM_GPU_ARCHES}
+    INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR}
+    INCLUDE_DIRECTORIES ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+    LIBRARIES ${_CUBLAS_LIBRARY}
+    USE_SABI 3
+    WITH_SOABI)
+else()
+  define_extension_target(
+    _C
+    DESTINATION vllm
+    LANGUAGE ${VLLM_GPU_LANG}
+    SOURCES ${VLLM_EXT_SRC}
+    COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+    ARCHITECTURES ${VLLM_GPU_ARCHES}
+    INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR}
+    INCLUDE_DIRECTORIES ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+    USE_SABI 3
+    WITH_SOABI)
+endif()
 
 # If CUTLASS is compiled on NVCC >= 12.5, it by default uses
 # cudaGetDriverEntryPointByVersion as a wrapper to avoid directly calling the

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -38,12 +39,15 @@ envs = load_module_from_path("envs", os.path.join(ROOT_DIR, "vllm", "envs.py"))
 
 VLLM_TARGET_DEVICE = envs.VLLM_TARGET_DEVICE
 
+IS_WINDOWS = platform.system() == "Windows"
+
 if sys.platform.startswith("darwin") and VLLM_TARGET_DEVICE != "cpu":
     logger.warning("VLLM_TARGET_DEVICE automatically set to `cpu` due to macOS")
     VLLM_TARGET_DEVICE = "cpu"
-elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")):
+elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")
+              or IS_WINDOWS):
     logger.warning(
-        "vLLM only supports Linux platform (including WSL) and MacOS."
+        "vLLM only supports Linux platform (including WSL), Windows and MacOS."
         "Building on %s, "
         "so vLLM may not be able to run correctly",
         sys.platform,
@@ -59,6 +63,13 @@ elif (
     # fallback to cpu
     VLLM_TARGET_DEVICE = "cpu"
 
+IS_WSL = ("microsoft-standard-WSL2" in platform.uname().release
+          or "-Microsoft" in platform.uname().release)
+
+if ((IS_WINDOWS or IS_WSL)
+        and os.environ.get("VLLM_FORCE_FA3_WINDOWS_BUILD", "0") != "1"):
+    # FA3 CAUSES COMPILER CRASH ON WSL2 AND WINDOWS, DISABLE IT
+    os.environ['VLLM_DISABLE_FA3_BUILD'] = "1"
 
 def is_sccache_available() -> bool:
     return which("sccache") is not None and not bool(
@@ -145,7 +156,8 @@ class cmake_build_ext(build_ext):
         if verbose:
             cmake_args += ["-DCMAKE_VERBOSE_MAKEFILE=ON"]
 
-        if is_sccache_available():
+        # Prefer ccache over sccache on Windows, is more stable and cache can be cleared easily after use
+        if is_sccache_available() and (not IS_WINDOWS or not is_ccache_available()):
             cmake_args += [
                 "-DCMAKE_C_COMPILER_LAUNCHER=sccache",
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
@@ -162,11 +174,83 @@ class cmake_build_ext(build_ext):
 
         # Pass the python executable to cmake so it can find an exact
         # match.
-        cmake_args += ["-DVLLM_PYTHON_EXECUTABLE={}".format(sys.executable)]
+        python_exec_path = sys.executable
+        if IS_WINDOWS:
+            python_exec_path = python_exec_path.replace('\\', '\\\\')
+
+        cmake_args += ['-DVLLM_PYTHON_EXECUTABLE={}'.format(python_exec_path)]
 
         # Pass the python path to cmake so it can reuse the build dependencies
         # on subsequent calls to python.
         cmake_args += ["-DVLLM_PYTHON_PATH={}".format(":".join(sys.path))]
+
+        # Set correct cuda paths, cuda libs and options for CMake
+        if VLLM_TARGET_DEVICE == 'cuda':
+            cuda_path = None
+            if 'CUDA_HOME' in os.environ:
+                cuda_path = os.environ.get('CUDA_HOME')
+            elif 'CUDA_ROOT' in os.environ:
+                cuda_path = os.environ.get('CUDA_ROOT')
+            elif 'CUDA_PATH' in os.environ:
+                cuda_path = os.environ.get('CUDA_PATH')
+            elif which('nvcc') is not None:
+                cuda_path = os.path.abspath(
+                    os.path.join(which('nvcc'), '..', '..'))
+
+            if sys.platform.startswith('win32'):
+                if cuda_path:
+                    cmake_args += [
+                        f'-Dnvtx3_dir={cuda_path}\\include',
+                        f'-DCUDA_cublas_LIBRARY={cuda_path}\\lib\\x64\\cublas.lib'
+                    ]
+            elif IS_WSL:
+                if cuda_path is not None:
+                    cuda_path = os.path.abspath(
+                        os.path.join(which('nvcc'), '..', '..'))
+                    if os.path.exists(f'{cuda_path}/include/nvtx3'):
+                        cmake_args.append(f'-Dnvtx3_dir={cuda_path}/include')
+                    if os.path.exists(f'{cuda_path}/lib64/libcublas.so'):
+                        cmake_args.append(
+                            f'-DCUDA_cublas_LIBRARY={cuda_path}/lib64/libcublas.so'
+                        )
+
+            if (sys.platform.startswith("linux")
+                    and os.environ.get('USE_CUFILE', '0') == '1'):
+                cmake_args.append('-DUSE_CUFILE=1')
+                cmake_args.append('-DCAFFE2_USE_CUFILE=1')
+
+            if os.environ.get('USE_CUDSS', '0') == '1':
+                cmake_args.append('-DUSE_CUDSS=1')
+                if os.environ.get('CUDSS_LIBRARY_PATH', None):
+                    cmake_args.append(
+                        f'-DCUDSS_LIBRARY_PATH={os.environ.get("CUDSS_LIBRARY_PATH")}'
+                    )
+                if os.environ.get('CUDSS_INCLUDE_PATH', None):
+                    cmake_args.append(
+                        f'-DCUDSS_INCLUDE_PATH={os.environ.get("CUDSS_INCLUDE_PATH")}'
+                    )
+
+            if os.environ.get('USE_CUDNN', '0') == '1':
+                cmake_args.append('-DCAFFE2_USE_CUDNN=1')
+                if os.environ.get('CUDNN_LIBRARY_PATH', None):
+                    cmake_args.append(
+                        f'-DCUDNN_LIBRARY_PATH={os.environ.get("CUDNN_LIBRARY_PATH")}'
+                    )
+                if os.environ.get('CUDNN_INCLUDE_PATH', None):
+                    cmake_args.append(
+                        f'-DCUDNN_INCLUDE_PATH={os.environ.get("CUDNN_INCLUDE_PATH")}'
+                    )
+
+            if os.environ.get('USE_CUSPARSELT', '0') == '1':
+                cmake_args.append('-DCAFFE2_USE_CUSPARSELT=1')
+                if os.environ.get('CUSPARSELT_LIBRARY_PATH', None):
+                    cmake_args.append(
+                        f'-DCUSPARSELT_LIBRARY_PATH={os.environ.get("CUSPARSELT_LIBRARY_PATH")}'
+                    )
+                if os.environ.get('CUSPARSELT_INCLUDE_PATH', None):
+                    cmake_args.append(
+                        f'-DCUSPARSELT_INCLUDE_PATH={os.environ.get("CUSPARSELT_INCLUDE_PATH")}'
+                    )
 
         # Override the base directory for FetchContent downloads to $ROOT/.deps
         # This allows sharing dependencies between profiles,
@@ -195,7 +279,10 @@ class cmake_build_ext(build_ext):
             build_tool = []
         # Make sure we use the nvcc from CUDA_HOME
         if _is_cuda():
-            cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
+            if IS_WINDOWS:
+                cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME.replace("\\", "/")}/bin/nvcc.exe"]
+            else:
+                cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
         elif _is_hip():
             cmake_args += [f"-DROCM_PATH={ROCM_HOME}"]
 
@@ -605,6 +692,10 @@ def get_requirements() -> list[str]:
         requirements = _read_requirements("xpu.txt")
     else:
         raise ValueError("Unsupported platform, please use CUDA, ROCm, or CPU.")
+
+    if IS_WINDOWS:
+        requirements.extend(_read_requirements("windows.txt"))
+
     return requirements
 
 
@@ -622,7 +713,8 @@ if _is_hip():
 
 if _is_cuda():
     ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa2_C"))
-    if envs.VLLM_USE_PRECOMPILED or get_nvcc_cuda_version() >= Version("12.3"):
+    if ((envs.VLLM_USE_PRECOMPILED or get_nvcc_cuda_version() >= Version("12.3"))
+            and os.environ.get("VLLM_DISABLE_FA3_BUILD", "0") != "1"):
         # FA3 requires CUDA 12.3 or later
         ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa3_C"))
         # Optional since this doesn't get built (produce an .so file) when

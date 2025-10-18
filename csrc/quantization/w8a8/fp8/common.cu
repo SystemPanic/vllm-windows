@@ -63,7 +63,7 @@ __global__ void segmented_max_reduction_strided(
 
   // thread 0 updates global scale (per-tensor) atomically.
   if (tid == 0) {
-    atomicMaxFloat(scale, cache[0] / quant_type_max_v<fp8_type>);
+    atomicMaxFloat(scale, cache[0] / quant_type_max<fp8_type>::val());
   }
 }
 
@@ -116,7 +116,7 @@ __global__ void dynamic_per_token_scaled_fp8_quant_kernel_strided(
   __shared__ float token_scale;
   if (tid == 0) {
     token_scale = scale_ub ? fminf(block_max, *scale_ub) : block_max;
-    token_scale = fmaxf(token_scale / quant_type_max_v<fp8_type>,
+    token_scale = fmaxf(token_scale / quant_type_max<fp8_type>::val(),
                         min_scaling_factor<fp8_type>::val());
     scale[token_idx] = token_scale;
   }

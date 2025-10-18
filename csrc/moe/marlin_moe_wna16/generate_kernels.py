@@ -3,6 +3,7 @@
 import glob
 import itertools
 import os
+import platform
 import subprocess
 
 import jinja2
@@ -51,11 +52,11 @@ THREAD_M_BLOCKS = [0.5, 1, 2, 3, 4]
 #   > 0 : group_size=16*group_blocks
 GROUP_BLOCKS = [0, -1, 1, 2, 4, 8]
 DTYPES = ["fp16", "bf16"]
-
+RM_COMMAND = ["cmd.exe", "/C", "del", "/F"] if platform.system() == "Windows" else ["rm", "-f"]
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/kernel_*.cu"):
-        subprocess.call(["rm", "-f", filename])
+        subprocess.call(RM_COMMAND + [filename])
 
 
 def generate_new_kernels():

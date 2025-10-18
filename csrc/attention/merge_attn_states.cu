@@ -11,30 +11,30 @@ namespace vllm {
 
 // Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
 // can be used to combine partial attention results (in the split-KV case)
-template <typename scalar_t, const uint NUM_THREADS>
+template <typename scalar_t, const unsigned int NUM_THREADS>
 __global__ void merge_attn_states_kernel(
     scalar_t* output, float* output_lse, const scalar_t* prefix_output,
     const float* prefix_lse, const scalar_t* suffix_output,
-    const float* suffix_lse, const uint num_tokens, const uint num_heads,
-    const uint head_size) {
+    const float* suffix_lse, const unsigned int num_tokens, const unsigned int num_heads,
+    const unsigned int head_size) {
   using pack_128b_t = uint4;
-  const uint pack_size = 16 / sizeof(scalar_t);
-  const uint threads_per_head = head_size / pack_size;
+  const unsigned int pack_size = 16 / sizeof(scalar_t);
+  const unsigned int threads_per_head = head_size / pack_size;
 
-  const uint global_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
-  const uint token_head_threads = num_tokens * num_heads * threads_per_head;
+  const unsigned int global_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
+  const unsigned int token_head_threads = num_tokens * num_heads * threads_per_head;
 
   if (global_idx >= token_head_threads) return;
 
   // global_idx -> token_idx + head_idx + pack_idx
-  const uint token_head_idx = global_idx / threads_per_head;
-  const uint pack_idx = global_idx % threads_per_head;
+  const unsigned int token_head_idx = global_idx / threads_per_head;
+  const unsigned int pack_idx = global_idx % threads_per_head;
 
-  const uint token_idx = token_head_idx / num_heads;
-  const uint head_idx = token_head_idx % num_heads;
+  const unsigned int token_idx = token_head_idx / num_heads;
+  const unsigned int head_idx = token_head_idx % num_heads;
 
-  const uint pack_offset = pack_idx * pack_size;  // (0~15)*8, etc.
-  const uint head_offset =
+  const unsigned int pack_offset = pack_idx * pack_size;  // (0~15)*8, etc.
+  const unsigned int head_offset =
       token_idx * num_heads * head_size + head_idx * head_size;
   const scalar_t* prefix_head_ptr = prefix_output + head_offset;
   const scalar_t* suffix_head_ptr = suffix_output + head_offset;
@@ -89,7 +89,7 @@ __global__ void merge_attn_states_kernel(
     pack_128b_t o_out_pack;
 
 #pragma unroll
-    for (uint i = 0; i < pack_size; ++i) {
+    for (unsigned int i = 0; i < pack_size; ++i) {
       // Always use float for FMA to keep high precision.
       // half(uint16_t), bfloat16, float -> float.
       const float p_out_f =
@@ -162,11 +162,11 @@ void merge_attn_states_launcher(torch::Tensor& output,
                                 const torch::Tensor& prefix_lse,
                                 const torch::Tensor& suffix_output,
                                 const torch::Tensor& suffix_lse) {
-  constexpr uint NUM_THREADS = 128;
-  const uint num_tokens = output.size(0);
-  const uint num_heads = output.size(1);
-  const uint head_size = output.size(2);
-  const uint pack_size = 16 / sizeof(scalar_t);
+  constexpr unsigned int NUM_THREADS = 128;
+  const unsigned int num_tokens = output.size(0);
+  const unsigned int num_heads = output.size(1);
+  const unsigned int head_size = output.size(2);
+  const unsigned int pack_size = 16 / sizeof(scalar_t);
   TORCH_CHECK(head_size % pack_size == 0,
               "headsize must be multiple of pack_size:", pack_size);
   TORCH_CHECK(output.stride(-2) == head_size && output.stride(-1) == 1,
@@ -183,8 +183,8 @@ void merge_attn_states_launcher(torch::Tensor& output,
   }
   // Process one pack elements per thread. for float, the
   // pack_size is 4 for half/bf16, the pack_size is 8.
-  const uint threads_per_head = head_size / pack_size;
-  const uint total_threads = num_tokens * num_heads * threads_per_head;
+  const unsigned int threads_per_head = head_size / pack_size;
+  const unsigned int total_threads = num_tokens * num_heads * threads_per_head;
 
   dim3 block(NUM_THREADS);
   dim3 grid((total_threads + NUM_THREADS - 1) / NUM_THREADS);
