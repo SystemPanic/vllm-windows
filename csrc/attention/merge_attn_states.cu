@@ -14,14 +14,14 @@ namespace vllm {
 
 // Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
 // can be used to combine partial attention results (in the split-KV case)
-template <typename scalar_t, typename output_t, const uint NUM_THREADS,
+template <typename scalar_t, typename output_t, const unsigned int NUM_THREADS,
           bool USE_FP8_OUTPUT>
 __global__ void merge_attn_states_kernel(
     output_t* output, float* output_lse, const scalar_t* prefix_output,
     const float* prefix_lse, const scalar_t* suffix_output,
-    const float* suffix_lse, const uint num_tokens, const uint num_heads,
-    const uint head_size, const uint prefix_head_stride,
-    const uint output_head_stride, const uint prefix_num_tokens,
+    const float* suffix_lse, const unsigned int num_tokens, const unsigned int num_heads,
+    const unsigned int head_size, const unsigned int prefix_head_stride,
+    const unsigned int output_head_stride, const unsigned int prefix_num_tokens,
     const float* output_scale) {
   // Inputs always load 128-bit packs (pack_size elements of scalar_t).
   // Outputs store pack_size elements of output_t, which is smaller for FP8.
@@ -30,25 +30,24 @@ __global__ void merge_attn_states_kernel(
       std::conditional_t<USE_FP8_OUTPUT,
                          std::conditional_t<sizeof(scalar_t) == 4, uint, uint2>,
                          uint4>;
-  const uint pack_size = 16 / sizeof(scalar_t);
-  const uint threads_per_head = head_size / pack_size;
-
-  const uint global_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
-  const uint token_head_threads = num_tokens * num_heads * threads_per_head;
+  const unsigned int pack_size = 16 / sizeof(scalar_t);
+  const unsigned int threads_per_head = head_size / pack_size;
+  const unsigned int global_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
+  const unsigned int token_head_threads = num_tokens * num_heads * threads_per_head;
 
   if (global_idx >= token_head_threads) return;
 
   // global_idx -> token_idx + head_idx + pack_idx
-  const uint token_head_idx = global_idx / threads_per_head;
-  const uint pack_idx = global_idx % threads_per_head;
+  const unsigned int token_head_idx = global_idx / threads_per_head;
+  const unsigned int pack_idx = global_idx % threads_per_head;
 
-  const uint token_idx = token_head_idx / num_heads;
-  const uint head_idx = token_head_idx % num_heads;
+  const unsigned int token_idx = token_head_idx / num_heads;
+  const unsigned int head_idx = token_head_idx % num_heads;
 
-  const uint pack_offset = pack_idx * pack_size;  // (0~15)*8, etc.
-  const uint src_head_offset = token_idx * num_heads * prefix_head_stride +
+  const unsigned int pack_offset = pack_idx * pack_size;  // (0~15)*8, etc.
+  const unsigned int src_head_offset = token_idx * num_heads * prefix_head_stride +
                                head_idx * prefix_head_stride;
-  const uint dst_head_offset = token_idx * num_heads * output_head_stride +
+  const unsigned int dst_head_offset = token_idx * num_heads * output_head_stride +
                                head_idx * output_head_stride;
   const scalar_t* prefix_head_ptr = prefix_output + src_head_offset;
   const scalar_t* suffix_head_ptr = suffix_output + src_head_offset;
@@ -154,7 +153,7 @@ __global__ void merge_attn_states_kernel(
     // Compute merged values in float32
     float o_out_f[pack_size];
 #pragma unroll
-    for (uint i = 0; i < pack_size; ++i) {
+    for (unsigned int i = 0; i < pack_size; ++i) {
       const float p_out_f =
           vllm::to_float(reinterpret_cast<const scalar_t*>(&p_out_pack)[i]);
       const float s_out_f =
@@ -251,17 +250,17 @@ void merge_attn_states_launcher(
     const std::optional<int64_t> prefill_tokens_with_context,
     const std::optional<torch::Tensor>& output_scale) {
   constexpr uint NUM_THREADS = 128;
-  const uint num_tokens = output.size(0);
-  const uint num_heads = output.size(1);
-  const uint head_size = output.size(2);
-  const uint prefix_head_stride = prefix_output.stride(1);
-  const uint output_head_stride = output.stride(1);
+  const unsigned int num_tokens = output.size(0);
+  const unsigned int num_heads = output.size(1);
+  const unsigned int head_size = output.size(2);
+  const unsigned int prefix_head_stride = prefix_output.stride(1);
+  const unsigned int output_head_stride = output.stride(1);
   // Thread mapping is based on input BF16 pack_size
-  const uint pack_size = 16 / sizeof(scalar_t);
+  const unsigned int pack_size = 16 / sizeof(scalar_t);
   TORCH_CHECK(head_size % pack_size == 0,
               "headsize must be multiple of pack_size:", pack_size);
 
-  const uint prefix_num_tokens =
+  const unsigned int prefix_num_tokens =
       prefill_tokens_with_context.has_value()
           ? static_cast<uint>(prefill_tokens_with_context.value())
           : num_tokens;
@@ -278,8 +277,8 @@ void merge_attn_states_launcher(
   }
   // Process one pack elements per thread. for float, the
   // pack_size is 4 for half/bf16, the pack_size is 8.
-  const uint threads_per_head = head_size / pack_size;
-  const uint total_threads = num_tokens * num_heads * threads_per_head;
+  const unsigned int threads_per_head = head_size / pack_size;
+  const unsigned int total_threads = num_tokens * num_heads * threads_per_head;
 
   dim3 block(NUM_THREADS);
   dim3 grid((total_threads + NUM_THREADS - 1) / NUM_THREADS);

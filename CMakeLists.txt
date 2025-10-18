@@ -310,6 +310,27 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
 
   # Set CUTLASS_REVISION. Used for FetchContent. Also fixes some bogus messages when building.
   set(CUTLASS_REVISION "v4.4.2")
+  set(CUTLASS_ENABLE_CUBLAS ON CACHE BOOL "cuBLAS enabled for Cutlass")
+  set(CUBLAS_ENABLED ON CACHE BOOL "cuBLAS enabled")
+  if (WIN32)
+	list(APPEND VLLM_GPU_FLAGS "--disable-warnings")
+	list(APPEND VLLM_GPU_FLAGS "-O2")
+	list(APPEND VLLM_GPU_FLAGS "-FS")
+	list(APPEND VLLM_GPU_FLAGS "-Xptxas=-O2")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/O2")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/FS")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/Z7")
+	list(APPEND VLLM_GPU_FLAGS "-Xcompiler=/Zc:__cplusplus")
+	string(REPLACE "/Zi" "/Z7" VLLM_GPU_FLAGS "${VLLM_GPU_FLAGS}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+	string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+	string(APPEND CMAKE_CXX_FLAGS "/Zc:__cplusplus")
+	set(CMAKE_CUDA_FLAGS_DEBUG "")
+  endif()
 
   # Use the specified CUTLASS source directory for compilation if VLLM_CUTLASS_SRC_DIR is provided
   if (DEFINED ENV{VLLM_CUTLASS_SRC_DIR})
@@ -989,17 +1010,31 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
     endif()
   endif()
 
-  message(STATUS "Enabling C_stable extension.")
-  define_extension_target(
-    _C_stable_libtorch
-    DESTINATION vllm
-    LANGUAGE ${VLLM_GPU_LANG}
-    SOURCES ${VLLM_STABLE_EXT_SRC}
-    COMPILE_FLAGS ${VLLM_GPU_FLAGS}
-    ARCHITECTURES ${VLLM_GPU_ARCHES}
-    INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR} ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
-    USE_SABI 3
-    WITH_SOABI)
+  message(STATUS "Enabling C_stable extension.")	
+  if (DEFINED _CUBLAS_LIBRARY)
+    define_extension_target(
+      _C_stable_libtorch
+      DESTINATION vllm
+      LANGUAGE ${VLLM_GPU_LANG}
+      SOURCES ${VLLM_STABLE_EXT_SRC}
+      COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+      ARCHITECTURES ${VLLM_GPU_ARCHES}
+      INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR} ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+      LIBRARIES ${_CUBLAS_LIBRARY}
+      USE_SABI 3
+      WITH_SOABI)
+  else()
+    define_extension_target(
+      _C_stable_libtorch
+      DESTINATION vllm
+      LANGUAGE ${VLLM_GPU_LANG}
+      SOURCES ${VLLM_STABLE_EXT_SRC}
+      COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+      ARCHITECTURES ${VLLM_GPU_ARCHES}
+      INCLUDE_DIRECTORIES ${CUTLASS_INCLUDE_DIR} ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+      USE_SABI 3
+      WITH_SOABI)
+  endif()
 
   # Set TORCH_TARGET_VERSION for stable ABI compatibility.
   # This ensures we only use C-shim APIs available in PyTorch 2.10.
@@ -1011,7 +1046,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   # Needed to use cuda APIs from C-shim
   target_compile_definitions(_C_stable_libtorch PRIVATE
     USE_CUDA)
-
+	
   # Needed by CUTLASS kernels
   target_compile_definitions(_C_stable_libtorch PRIVATE
     CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1)

@@ -48,6 +48,12 @@ install(FILES "${FLASHMLA_VENDOR_DIR}/flash_mla_interface.py"
         DESTINATION vllm/third_party/flashmla/
         COMPONENT _flashmla_C)
 
+if (WIN32)
+  find_package(PythonInterp)
+  find_package(Python)
+  execute_process(COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fix_cutlass_msvc.py ${flashmla_SOURCE_DIR})
+endif()
+
 # The FlashMLA kernels only work on hopper and require CUDA 12.3 or later.
 # Only build FlashMLA kernels if we are building for something compatible with 
 # sm90a

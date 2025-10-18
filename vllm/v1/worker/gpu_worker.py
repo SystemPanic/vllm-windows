@@ -5,6 +5,7 @@
 import gc
 import os
 from collections.abc import Callable
+import platform
 from contextlib import AbstractContextManager, nullcontext
 from datetime import timedelta
 from types import NoneType
@@ -1029,6 +1030,7 @@ def init_worker_distributed_environment(
     init_batch_invariance(attention_config.backend)
     override_envs_for_eplb(parallel_config)
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
+    backend = "gloo" if platform.system() == "Windows" else backend
 
     init_method = distributed_init_method or "env://"
 
