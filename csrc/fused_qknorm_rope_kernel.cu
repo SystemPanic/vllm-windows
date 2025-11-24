@@ -56,17 +56,17 @@ template <typename T, int num>
 struct packed_as;
 // Specialization for packed_as used in this kernel.
 template <>
-struct packed_as<uint, 1> {
-  using type = uint;
+struct packed_as<unsigned int, 1> {
+  using type = unsigned int;
 };
 
 template <>
-struct packed_as<uint, 2> {
+struct packed_as<unsigned int, 2> {
   using type = uint2;
 };
 
 template <>
-struct packed_as<uint, 4> {
+struct packed_as<unsigned int, 4> {
   using type = uint4;
 };
 
@@ -169,8 +169,8 @@ __global__ void fusedQKNormRopeKernel(
                   "numSizeBytes must be a multiple of 4");
     constexpr int vecSize =
         elemSizeBytes /
-        4;  // Use packed_as<uint, vecSize> to perform loading/saving.
-    using vec_T = typename tensorrt_llm::common::packed_as<uint, vecSize>::type;
+        4;  // Use packed_as<unsigned int, vecSize> to perform loading/saving.
+    using vec_T = typename tensorrt_llm::common::packed_as<unsigned int, vecSize>::type;
 
     int offsetWarp;  // Offset for the warp
     if (isQ) {

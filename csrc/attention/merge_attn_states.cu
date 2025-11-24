@@ -42,8 +42,8 @@ __global__ void merge_attn_states_kernel(
 
   float p_lse = prefix_lse[head_idx * num_tokens + token_idx];
   float s_lse = suffix_lse[head_idx * num_tokens + token_idx];
-  p_lse = std::isinf(p_lse) ? -std::numeric_limits<float>::infinity() : p_lse;
-  s_lse = std::isinf(s_lse) ? -std::numeric_limits<float>::infinity() : s_lse;
+  p_lse = ::isinf(p_lse) ? -std::numeric_limits<float>::infinity() : p_lse;
+  s_lse = ::isinf(s_lse) ? -std::numeric_limits<float>::infinity() : s_lse;
 
   const float max_lse = fmaxf(p_lse, s_lse);
 
@@ -55,7 +55,7 @@ __global__ void merge_attn_states_kernel(
      prefix_output (expected to be all zeros) and prefix_lse (-inf) to fix
      this problem.
   */
-  if (std::isinf(max_lse)) {
+  if (::isinf(max_lse)) {
     if (pack_offset < head_size) {
       // Pack 128b load
       pack_128b_t p_out_pack = reinterpret_cast<const pack_128b_t*>(

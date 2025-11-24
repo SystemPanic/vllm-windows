@@ -56,8 +56,8 @@ endif()
 # requirements.txt files and should be kept consistent.  The ROCm torch
 # versions are derived from docker/Dockerfile.rocm
 #
-set(TORCH_SUPPORTED_VERSION_CUDA "2.7.1")
-set(TORCH_SUPPORTED_VERSION_ROCM "2.7.1")
+set(TORCH_SUPPORTED_VERSION_CUDA "2.8.0")
+set(TORCH_SUPPORTED_VERSION_ROCM "2.8.0")
 
 #
 # Try to find python package with an executable that exactly matches
@@ -329,7 +329,6 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
 	string(APPEND CMAKE_CXX_FLAGS "/Zc:__cplusplus")
 	set(CMAKE_CUDA_FLAGS_DEBUG "")
   endif()
->>>>>>> v0.11.1 RC
 
   # Use the specified CUTLASS source directory for compilation if VLLM_CUTLASS_SRC_DIR is provided
   if (DEFINED ENV{VLLM_CUTLASS_SRC_DIR})
