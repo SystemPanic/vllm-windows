@@ -22,7 +22,7 @@ from vllm.engine.arg_utils import (
     optional_type,
     parse_type,
 )
-from vllm.utils import FlexibleArgumentParser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 
 @pytest.mark.parametrize(
@@ -279,7 +279,7 @@ def test_prefix_cache_default():
     args = parser.parse_args([])
 
     engine_args = EngineArgs.from_cli_args(args=args)
-    assert not engine_args.enable_prefix_caching, "prefix caching defaults to off."
+    assert engine_args.enable_prefix_caching, "prefix caching should default to on."
 
     # with flag to turn it on.
     args = parser.parse_args(["--enable-prefix-caching"])
