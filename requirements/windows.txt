@@ -1,3 +1,3 @@
 winloop
-triton-windows==3.2.0.post19
-xformers==0.0.31.post1
+triton-windows==3.4.0.post20
+xformers==0.0.32.post2
