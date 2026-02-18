@@ -161,6 +161,91 @@ QUANT_CONFIGS = [
     },
 ]
 
+# Header for kernel_selector.h: defines the KernelKey struct and hash,
+# then opens the unordered_map initializer.
+# Using long long for the type-id fields because vllm::ScalarType::id()
+# returns a 64-bit value; the remaining fields are small integers / bools.
+KERNEL_SELECTOR_MAP_HEAD = """\
+{
+  struct KernelKey {
+    long long a, b, c, s;
+    int threads, tm, tn, tk;
+    bool msz8, izpf;
+    int stages, gb;
+    bool operator==(const KernelKey& o) const noexcept {
+      return a==o.a && b==o.b && c==o.c && s==o.s &&
+             threads==o.threads && tm==o.tm && tn==o.tn && tk==o.tk &&
+             msz8==o.msz8 && izpf==o.izpf && stages==o.stages && gb==o.gb;
+    }
+  };
+  struct KernelKeyHash {
+    std::size_t operator()(const KernelKey& k) const noexcept {
+      std::size_t h = 2166136261u;
+      auto mix = [&](std::size_t v){ h ^= v; h *= 16777619u; };
+      mix(static_cast<std::size_t>(k.a)); mix(static_cast<std::size_t>(k.b));
+      mix(static_cast<std::size_t>(k.c)); mix(static_cast<std::size_t>(k.s));
+      mix(static_cast<std::size_t>(k.threads));
+      mix(static_cast<std::size_t>(k.tm)); mix(static_cast<std::size_t>(k.tn));
+      mix(static_cast<std::size_t>(k.tk));
+      mix(static_cast<std::size_t>(k.msz8)); mix(static_cast<std::size_t>(k.izpf));
+      mix(static_cast<std::size_t>(k.stages));
+      mix(static_cast<std::size_t>(k.gb + 128));
+      return h;
+    }
+  };
+
+  static const std::unordered_map<KernelKey, MarlinFuncPtr, KernelKeyHash> kernel_map = {
+"""
+
+# Footer: closes the map, then does the fp8 guard + lookup.
+KERNEL_SELECTOR_MAP_FOOT = """\
+  };
+
+  if (a_type == vllm::kFE4M3fn) {
+    TORCH_CHECK(false, "marlin kernel with fp8 activation is not built.");
+  } else {
+    KernelKey key{
+      a_type.id(), b_type.id(), c_type.id(), s_type.id(),
+      threads, thread_m_blocks, thread_n_blocks, thread_k_blocks,
+      m_block_size_8, is_zp_float, stages, group_blocks
+    };
+    auto it = kernel_map.find(key);
+    if (it != kernel_map.end()) kernel = it->second;
+  }
+}
+"""
+
+# Footer used when FP8 IS supported (no TORCH_CHECK guard needed).
+KERNEL_SELECTOR_MAP_FOOT_FP8 = """\
+  };
+
+  {
+    KernelKey key{
+      a_type.id(), b_type.id(), c_type.id(), s_type.id(),
+      threads, thread_m_blocks, thread_n_blocks, thread_k_blocks,
+      m_block_size_8, is_zp_float, stages, group_blocks
+    };
+    auto it = kernel_map.find(key);
+    if (it != kernel_map.end()) kernel = it->second;
+  }
+}
+"""
+
+# One map entry line.  All fields except the Marlin<> instantiation are
+# known at generation time so we can emit integer literals directly.
+KERNEL_SELECTOR_ENTRY_TEMPLATE = (
+    "    {{KernelKey{{"
+    "{a_type_id}, {b_type_id}, {c_type_id}, {s_type_id}, "
+    "{threads}, {thread_m_blocks}, {thread_n_blocks}, {thread_k_blocks}, "
+    "{m_block_size_8}, {is_zp_float}, {stages}, {group_blocks}"
+    "}}, "
+    "Marlin<"
+    "{a_type_id}, {b_type_id}, {c_type_id}, {s_type_id}, "
+    "{threads}, {thread_m_blocks}, {thread_n_blocks}, {thread_k_blocks}, "
+    "{m_block_size_8}, {stages}, {group_blocks}, {is_zp_float}"
+    ">}}{comma}\n"
+)
+
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
@@ -228,7 +313,11 @@ def generate_new_kernels():
                     config_sm75["stages"] = 2
                     sm_75_result_dict[(a_type, b_type, c_type)].append(config_sm75)
 
-    kernel_selector_str = FILE_HEAD_COMMENT
+    # ------------------------------------------------------------------ #
+    # Collect every (a_type, b_type, c_type, config) entry we will need   #
+    # for the kernel_selector.h map.                                      #
+    # ------------------------------------------------------------------ #
+    all_entries = []  # list of (a_type, b_type, c_type, config) tuples
 
     for result_dict_tmp in [result_dict, sm_75_result_dict]:
         for (a_type, b_type, c_type), config_list in result_dict_tmp.items():
@@ -236,6 +325,8 @@ def generate_new_kernels():
             if not config_list:
                 continue
             for config in config_list:
+                all_entries.append((a_type, b_type, c_type, config))
+
                 s_type = config["s_type"]
                 template_str = jinja2.Template(TEMPLATE).render(
                     a_type_id=f"vllm::{a_type}.id()",
@@ -245,46 +336,6 @@ def generate_new_kernels():
                     **config,
                 )
                 all_template_str_list.append(template_str)
-
-                conditions = [
-                    f"a_type == vllm::{a_type}",
-                    f"b_type == vllm::{b_type}",
-                    f"c_type == vllm::{c_type}",
-                    f"s_type == vllm::{s_type}",
-                    f"threads == {config['threads']}",
-                    f"thread_m_blocks == {config['thread_m_blocks']}",
-                    f"thread_n_blocks == {config['thread_n_blocks']}",
-                    f"thread_k_blocks == {config['thread_k_blocks']}",
-                    f"m_block_size_8 == {config['m_block_size_8']}",
-                    f"stages == {config['stages']}",
-                    f"group_blocks == {config['group_blocks']}",
-                    f"is_zp_float == {config['is_zp_float']}",
-                ]
-                conditions = " && ".join(conditions)
-
-                if kernel_selector_str == FILE_HEAD_COMMENT:
-                    kernel_selector_str += f"if ({conditions})\n  kernel = "
-                else:
-                    kernel_selector_str += f"else if ({conditions})\n  kernel = "
-
-                kernel_template2 = (
-                    "Marlin<{{a_type_id}}, {{b_type_id}}, {{c_type_id}}, "
-                    "{{s_type_id}}, {{threads}}, {{thread_m_blocks}}, "
-                    "{{thread_n_blocks}}, {{thread_k_blocks}}, "
-                    "{{m_block_size_8}}, {{stages}}, {{group_blocks}}, "
-                    "{{is_zp_float}}>;"
-                )
-
-                kernel_selector_str += (
-                    jinja2.Template(kernel_template2).render(
-                        a_type_id=f"vllm::{a_type}.id()",
-                        b_type_id=f"vllm::{b_type}.id()",
-                        c_type_id=f"vllm::{c_type}.id()",
-                        s_type_id=f"vllm::{s_type}.id()",
-                        **config,
-                    )
-                    + "\n"
-                )
 
             file_content = FILE_HEAD + "\n\n"
             file_content += "\n\n".join(all_template_str_list) + "\n\n}\n"
@@ -300,12 +351,37 @@ def generate_new_kernels():
             with open(os.path.join(os.path.dirname(__file__), filename), "w") as f:
                 f.write(file_content)
 
-    if not SUPPORT_FP8 and kernel_selector_str != FILE_HEAD_COMMENT:
-        kernel_selector_str += (
-            "else if (a_type == vllm::kFE4M3fn)\n"
-            "  TORCH_CHECK(false, "
-            '"marlin kernel with fp8 activation is not built.");'
+    # ------------------------------------------------------------------ #
+    # Write kernel_selector.h as an unordered_map lookup to avoid the    #
+    # MSVC C1061 "blocks too deeply nested" error that the old            #
+    # if/else-if chain triggered.                                         #
+    # ------------------------------------------------------------------ #
+    kernel_selector_str = FILE_HEAD_COMMENT
+    kernel_selector_str += KERNEL_SELECTOR_MAP_HEAD
+
+    for idx, (a_type, b_type, c_type, config) in enumerate(all_entries):
+        s_type = config["s_type"]
+        comma = "," if idx < len(all_entries) - 1 else ""
+        kernel_selector_str += KERNEL_SELECTOR_ENTRY_TEMPLATE.format(
+            a_type_id=f"vllm::{a_type}.id()",
+            b_type_id=f"vllm::{b_type}.id()",
+            c_type_id=f"vllm::{c_type}.id()",
+            s_type_id=f"vllm::{s_type}.id()",
+            threads=config["threads"],
+            thread_m_blocks=int(config["thread_m_blocks"]),
+            thread_n_blocks=config["thread_n_blocks"],
+            thread_k_blocks=config["thread_k_blocks"],
+            m_block_size_8=config["m_block_size_8"],
+            stages=config["stages"],
+            group_blocks=config["group_blocks"],
+            is_zp_float=config["is_zp_float"],
+            comma=comma,
         )
+
+    if SUPPORT_FP8:
+        kernel_selector_str += KERNEL_SELECTOR_MAP_FOOT_FP8
+    else:
+        kernel_selector_str += KERNEL_SELECTOR_MAP_FOOT
 
     with open(os.path.join(os.path.dirname(__file__), "kernel_selector.h"), "w") as f:
         f.write(kernel_selector_str)

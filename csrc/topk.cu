@@ -274,7 +274,11 @@ __device__ void fast_topk_cuda_tl(
 
 __global__ __launch_bounds__(kThreadsPerBlock) void topk_kernel(
     const FastTopKParams params) {
-  const auto& [input, row_starts, indices, lengths, input_stride] = params;
+  const float* __restrict__ input        = params.input;
+  const int32_t* __restrict__ row_starts = params.row_starts;
+  int32_t* __restrict__ indices          = params.indices;
+  int32_t* __restrict__ lengths          = params.lengths;
+  const int64_t input_stride             = params.input_stride;
   const uint64_t batch_idx = blockIdx.x;
   const int logits_offset = row_starts == nullptr ? 0 : row_starts[batch_idx];
   const int seq_len = lengths[batch_idx];
@@ -318,13 +322,13 @@ FastTopKParams get_params(
     indices_ptr = indices.data_ptr<int32_t>();
   }
 
-  return FastTopKParams{
-      .input = score.data_ptr<float>(),
-      .row_starts = row_starts_ptr,
-      .indices = indices_ptr,
-      .lengths = lengths.data_ptr<int32_t>(),
-      .input_stride = score.stride(0),
-  };
+  FastTopKParams p;
+  p.input        = score.data_ptr<float>();
+  p.row_starts   = row_starts_ptr;
+  p.indices      = indices_ptr;
+  p.lengths      = lengths.data_ptr<int32_t>();
+  p.input_stride = score.stride(0);
+  return p;
 }
 
 template <auto* kernel_func, size_t smem_bytes>

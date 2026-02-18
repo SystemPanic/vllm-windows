@@ -4,17 +4,15 @@
 numba == 0.61.2 # Required for N-gram speculative decoding
 
 # Dependencies for NVIDIA GPUs
-torch==2.10.0
-torchaudio==2.10.0
+ray[cgraph]>=2.48.0
+torch==2.11.0.dev20260216+cu126
+torchaudio==2.11.0.dev20260216+cu126
 # These must be updated alongside torch
-torchvision==0.25.0 # Required for phi3v processor. See https://github.com/pytorch/vision?tab=readme-ov-file#installation for corresponding version
+torchvision==0.26.0.dev20260216+cu126 # Required for phi3v processor. See https://github.com/pytorch/vision?tab=readme-ov-file#installation for corresponding version
 # FlashInfer should be updated together with the Dockerfile
-flashinfer-python==0.6.7
-flashinfer-cubin==0.6.7
-# Cap nvidia-cudnn-frontend (transitive dep of flashinfer) due to
-# breaking changes in 1.19.0
-nvidia-cudnn-frontend>=1.13.0,<1.19.0
+flashinfer-python @ https://github.com/SystemPanic/flashinfer-windows/releases/download/v0.6.3/flashinfer_python-0.6.3-py3-none-any.whl
+flashinfer-jit-cache @ https://github.com/SystemPanic/flashinfer-windows/releases/download/v0.6.3/flashinfer_jit_cache-0.6.3-cp39-abi3-win_amd64.whl
 
 # QuACK and Cutlass DSL for FA4 (cute-DSL implementation)
-nvidia-cutlass-dsl>=4.4.2
-quack-kernels>=0.3.3
+nvidia-cutlass-dsl>=4.4.0.dev1
+quack-kernels>=0.2.7

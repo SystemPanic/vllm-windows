@@ -80,7 +80,7 @@ __device__ void compute_dynamic_per_token_scales(
     scalar_t const* __restrict__ residual = nullptr,
     int32_t const group_size = 0, int64_t outer_scale_stride = 1) {
   float block_absmax_val_maybe = 0.0f;
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>::val()};
+  constexpr scalar_out_t qmax{quant_type_max<scalar_out_t>::val()};
   __syncthreads();
 
   int64_t const input_token_offset =
