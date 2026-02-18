@@ -793,7 +793,7 @@ torch::Tensor hadacore_transform(torch::Tensor& x, bool inplace) {
     }
     torch::Tensor out = inplace ? x : torch::empty_like(x);
 
-    at::cuda::CUDAGuard device_guard{(char)x.get_device()};
+    at::cuda::CUDAGuard device_guard{(c10::DeviceIndex)x.get_device()};
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
     VLLM_DISPATCH_HALF_TYPES(x.scalar_type(), "hadacore_transform_runfht", [&] {
