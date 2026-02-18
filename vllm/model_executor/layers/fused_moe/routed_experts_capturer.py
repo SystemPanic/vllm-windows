@@ -4,10 +4,13 @@
 # https://github.com/sgl-project/sglang/blob/bed301a5acaa9577c9aa706468bdf242f6a43051/python/sglang/srt/layers/moe/routed_experts_capturer.py
 
 from __future__ import annotations
-
-import fcntl
-import logging
 import os
+import platform
+if platform.system() == "Windows":
+    import portalocker
+else:
+    import fcntl
+import logging
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -38,11 +41,18 @@ _global_experts_reader: RoutedExpertsReader | None = None
 def _file_lock(lock_file: str, mode: str = "wb+") -> Generator[None, None, None]:
     """Context manager for file-based locking."""
     with open(lock_file, mode) as fp:
-        fcntl.flock(fp, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fp, fcntl.LOCK_UN)
+        if platform.system() == "Windows":
+            portalocker.lock(fp, portalocker.LOCK_EX)
+            try:
+                yield
+            finally:
+                portalocker.unlock(fp)
+        else:
+            fcntl.flock(fp, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fp, fcntl.LOCK_UN)
 
 
 def _create_or_attach_shared_memory(
