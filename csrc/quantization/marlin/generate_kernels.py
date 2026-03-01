@@ -3,6 +3,7 @@
 import glob
 import itertools
 import os
+import platform
 import subprocess
 import sys
 
@@ -161,6 +162,8 @@ QUANT_CONFIGS = [
     },
 ]
 
+RM_COMMAND = ["cmd.exe", "/C", "del", "/F"] if platform.system() == "Windows" else ["rm", "-f"]
+
 # Header for kernel_selector.h: defines the KernelKey struct and hash,
 # then opens the unordered_map initializer.
 # Using long long for the type-id fields because vllm::ScalarType::id()
@@ -249,10 +252,10 @@ KERNEL_SELECTOR_ENTRY_TEMPLATE = (
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
-        subprocess.call(["rm", "-f", filename])
+        subprocess.call(RM_COMMAND + [filename])
 
     filename = os.path.dirname(__file__) + "/kernel_selector.h"
-    subprocess.call(["rm", "-f", filename])
+    subprocess.call(RM_COMMAND + [filename])
 
 
 def generate_new_kernels():
