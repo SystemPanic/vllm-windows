@@ -25,34 +25,6 @@ on:
         required: false
         default: '2.11.0.dev20260216+cu126'
         type: string
-  push:
-    branches:
-      - master
-      - 'vllm-for-windows*'
-    paths:
-      - 'CMakeLists.txt'
-      - 'setup.py'
-      - 'pyproject.toml'
-      - 'csrc/**'
-      - 'cmake/**'
-      - 'requirements/**'
-      - '.github/workflows/cuda-windows-build.yml'
-  pull_request:
-    branches:
-      - master
-    paths:
-      - 'CMakeLists.txt'
-      - 'setup.py'
-      - 'pyproject.toml'
-      - 'csrc/**'
-      - 'cmake/**'
-      - 'requirements/**'
-      - '.github/workflows/cuda-windows-build.yml'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CUDA_VERSION: ${{ inputs.cuda-version || '12.6' }}
   PYTHON_VERSION: ${{ inputs.python-version || '3.12' }}
