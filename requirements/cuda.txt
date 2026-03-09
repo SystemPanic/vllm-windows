@@ -12,7 +12,3 @@ torchvision==0.26.0.dev20260216+cu126 # Required for phi3v processor. See https:
 # FlashInfer should be updated together with the Dockerfile
 flashinfer-python @ https://github.com/SystemPanic/flashinfer-windows/releases/download/v0.6.3/flashinfer_python-0.6.3-py3-none-any.whl
 flashinfer-jit-cache @ https://github.com/SystemPanic/flashinfer-windows/releases/download/v0.6.3/flashinfer_jit_cache-0.6.3-cp39-abi3-win_amd64.whl
-
-# QuACK and Cutlass DSL for FA4 (cute-DSL implementation)
-nvidia-cutlass-dsl>=4.4.0.dev1
-quack-kernels>=0.2.7

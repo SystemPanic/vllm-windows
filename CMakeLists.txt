@@ -1229,6 +1229,10 @@ define_extension_target(
   USE_SABI 3
   WITH_SOABI)
 
+if(VLLM_GPU_LANG STREQUAL "CUDA" AND WIN32)
+  target_link_libraries(_moe_C PRIVATE ${CUDA_TOOLKIT_ROOT_DIR}/lib/x64/cublas.lib)
+endif()
+
 if(VLLM_GPU_LANG STREQUAL "HIP")
   #
   # _rocm_C extension
