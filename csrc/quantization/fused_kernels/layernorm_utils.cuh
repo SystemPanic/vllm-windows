@@ -303,7 +303,7 @@ __device__ void compute_dynamic_per_token_scales(
     int32_t const hidden_size, int32_t const input_stride,
     scalar_t const* __restrict__ residual = nullptr,
     int64_t outer_scale_stride = 1) {
-  constexpr scalar_out_t qmax{quant_type_max_v<scalar_out_t>::val()};
+  constexpr scalar_out_t qmax{quant_type_max<scalar_out_t>::val()};
 
   const int VEC_SIZE = 4;
   float block_absmax_val_maybe = 0.0f;
