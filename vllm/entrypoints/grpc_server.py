@@ -25,7 +25,17 @@ import time
 from collections.abc import AsyncGenerator
 
 import grpc
-import uvloop
+import platform
+
+if platform.system() == "Windows":
+    import winloop as uvloop_impl
+	import os
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 from grpc_reflection.v1alpha import reflection
 
 from vllm import SamplingParams, TextPrompt, TokensPrompt
@@ -531,7 +541,7 @@ def main():
 
     # Run server
     try:
-        uvloop.run(serve_grpc(args))
+        uvloop_impl.run(serve_grpc(args))
     except Exception as e:
         logger.exception("Server failed: %s", e)
         sys.exit(1)
