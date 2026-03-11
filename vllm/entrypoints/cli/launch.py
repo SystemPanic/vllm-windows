@@ -2,8 +2,17 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
+import platform
 
-import uvloop
+if platform.system() == "Windows":
+    import winloop as uvloop_impl
+	import os
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 
 from vllm import envs
 from vllm.config import VllmConfig
@@ -53,7 +62,7 @@ class RenderSubcommand(LaunchSubcommandBase):
 
     @staticmethod
     def cmd(args: argparse.Namespace) -> None:
-        uvloop.run(run_launch_fastapi(args))
+        uvloop_impl.run(run_launch_fastapi(args))
 
 
 class LaunchSubcommand(CLISubcommand):
