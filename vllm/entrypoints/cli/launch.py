@@ -6,7 +6,7 @@ import platform
 
 if platform.system() == "Windows":
     import winloop as uvloop_impl
-	import os
+    import os
     # Windows does not support fork
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
     # Disable libuv on Windows by default
