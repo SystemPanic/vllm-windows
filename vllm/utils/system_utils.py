@@ -340,15 +340,16 @@ def find_loaded_library(lib_name: str) -> str | None:
             if cuda_major_version < "12":
                 cuda_major_version += "0"
             if cuda_path:
+                dll_bin_path = os.path.join(cuda_path, "bin")
+                if os.path.exists(os.path.join(cuda_path, "bin", "x64")):
+                    dll_bin_path = os.path.join(cuda_path, "bin", "x64")
                 cudart_path = os.path.abspath(
-                    os.path.join(cuda_path, "bin",
-                                 f"cudart64_{cuda_major_version}.dll"))
+                    os.path.join(dll_bin_path, f"cudart64_{cuda_major_version}.dll"))
             else:
                 nvcc_path = which("nvcc")
                 if nvcc_path:
                     cudart_path = os.path.abspath(
-                        os.path.join(nvcc_path, "..",
-                                     f"cudart64_{cuda_major_version}.dll"))
+                        os.path.join(nvcc_path, f"cudart64_{cuda_major_version}.dll"))
             if cudart_path:
                 os.environ["VLLM_CUDART_SO_PATH"] = cudart_path
                 logger.info('VLLM_CUDART_SO_PATH resolved to %s', cudart_path)
