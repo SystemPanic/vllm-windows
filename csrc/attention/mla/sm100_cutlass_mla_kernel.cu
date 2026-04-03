@@ -208,15 +208,20 @@ void runMla(
   CUTLASS_CHECK(fmha.run(arguments, workspace.data_ptr(), stream));
 }
 
-#define DISPATCH_BOOL(expr, const_expr, ...) \
-  [&]() -> bool {                            \
-    if (expr) {                              \
-      constexpr bool const_expr = true;      \
-      return __VA_ARGS__();                  \
-    } else {                                 \
-      constexpr bool const_expr = false;     \
-      return __VA_ARGS__();                  \
-    }                                        \
+// MSVC (C2975) rejects constexpr bool locals captured in lambdas as template
+// arguments because it does not treat them as integral constant expressions at
+// the point of instantiation.  The fix is to encode the boolean as a type
+// (std::integral_constant<bool, V>) and pass that type as a template parameter
+// so the compiler can see it is a compile-time constant.  Each lambda receives
+// a typed tag value; callers recover the bool via decltype(tag)::value or the
+// ::value member directly.
+#define DISPATCH_BOOL(expr, const_expr, ...)                                    \
+  [&]() -> bool {                                                               \
+    if (expr) {                                                                 \
+      return __VA_ARGS__(std::integral_constant<bool, true>{});                 \
+    } else {                                                                    \
+      return __VA_ARGS__(std::integral_constant<bool, false>{});                \
+    }                                                                           \
   }()
 
 void sm100_cutlass_mla_decode(
@@ -238,8 +243,10 @@ void sm100_cutlass_mla_decode(
   // NOTE(alcanderian): IsPersistent has bug with manual split_kv.
   // Kernel will hang if batch is too large with large num_kv_splits. (for example bs=8, num_kv_splits=8)
   // Maybe per batch split kv will fix this.
-  DISPATCH_BOOL(page_size == 128, IsPaged128, [&] {
-    DISPATCH_BOOL(num_kv_splits <= 1, NotManualSplitKV, [&] {
+  DISPATCH_BOOL(page_size == 128, IsPaged128, [&](auto isPaged128Tag) {
+    constexpr bool IsPaged128 = decltype(isPaged128Tag)::value;
+    DISPATCH_BOOL(num_kv_splits <= 1, NotManualSplitKV, [&](auto notManualSplitKVTag) {
+      constexpr bool NotManualSplitKV = decltype(notManualSplitKVTag)::value;
       if (in_dtype == at::ScalarType::Half) {
         runMla<cutlass::half_t, cutlass::half_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
           out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
