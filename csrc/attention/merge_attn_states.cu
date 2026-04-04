@@ -28,7 +28,7 @@ __global__ void merge_attn_states_kernel(
   using input_pack_t = uint4;
   using output_pack_t =
       std::conditional_t<USE_FP8_OUTPUT,
-                         std::conditional_t<sizeof(scalar_t) == 4, uint, uint2>,
+                         std::conditional_t<sizeof(scalar_t) == 4, unsigned int, uint2>,
                          uint4>;
   const unsigned int pack_size = 16 / sizeof(scalar_t);
   const unsigned int threads_per_head = head_size / pack_size;
@@ -68,7 +68,7 @@ __global__ void merge_attn_states_kernel(
       if constexpr (USE_FP8_OUTPUT) {
         output_t o_out_pack[pack_size];
 #pragma unroll
-        for (uint i = 0; i < pack_size; ++i) {
+        for (unsigned int i = 0; i < pack_size; ++i) {
           const float val =
               vllm::to_float(reinterpret_cast<const scalar_t*>(&s_out_pack)[i]);
           o_out_pack[i] =
@@ -115,7 +115,7 @@ __global__ void merge_attn_states_kernel(
         // prefix_output is expected to be zeros)
         output_t o_out_pack[pack_size];
 #pragma unroll
-        for (uint i = 0; i < pack_size; ++i) {
+        for (unsigned int i = 0; i < pack_size; ++i) {
           const float val =
               vllm::to_float(reinterpret_cast<const scalar_t*>(&p_out_pack)[i]);
           o_out_pack[i] =
@@ -165,7 +165,7 @@ __global__ void merge_attn_states_kernel(
     if constexpr (USE_FP8_OUTPUT) {
       output_t o_out_pack[pack_size];
 #pragma unroll
-      for (uint i = 0; i < pack_size; ++i) {
+      for (unsigned int i = 0; i < pack_size; ++i) {
         o_out_pack[i] = vllm::scaled_fp8_conversion<true, output_t>(
             o_out_f[i], fp8_scale_inv);
       }
@@ -175,7 +175,7 @@ __global__ void merge_attn_states_kernel(
     } else {
       output_pack_t o_out_pack;
 #pragma unroll
-      for (uint i = 0; i < pack_size; ++i) {
+      for (unsigned int i = 0; i < pack_size; ++i) {
         vllm::from_float(reinterpret_cast<scalar_t*>(&o_out_pack)[i],
                          o_out_f[i]);
       }
@@ -249,7 +249,7 @@ void merge_attn_states_launcher(
     const torch::Tensor& suffix_output, const torch::Tensor& suffix_lse,
     const std::optional<int64_t> prefill_tokens_with_context,
     const std::optional<torch::Tensor>& output_scale) {
-  constexpr uint NUM_THREADS = 128;
+  constexpr unsigned int NUM_THREADS = 128;
   const unsigned int num_tokens = output.size(0);
   const unsigned int num_heads = output.size(1);
   const unsigned int head_size = output.size(2);
@@ -262,7 +262,7 @@ void merge_attn_states_launcher(
 
   const unsigned int prefix_num_tokens =
       prefill_tokens_with_context.has_value()
-          ? static_cast<uint>(prefill_tokens_with_context.value())
+          ? static_cast<unsigned int>(prefill_tokens_with_context.value())
           : num_tokens;
   TORCH_CHECK(prefix_num_tokens <= num_tokens,
               "prefix_num_tokens must be <= num_tokens");
