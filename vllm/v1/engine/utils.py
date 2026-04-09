@@ -5,6 +5,9 @@ import contextlib
 import os
 import threading
 import platform
+import socket
+import random
+global_dict_win = {"ports": []}
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -893,6 +896,22 @@ class CoreEngineActorManager:
             ray.util.remove_placement_group(pg)
 
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        # connect_ex returns 0 if the connection was successful (port is in use)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+def random_port_exclude(start, end):
+    res = random.randint(start, end)
+    port_is_in_use = False
+    while res in global_dict_win["ports"] or (port_is_in_use := is_port_in_use(res)):
+        if port_is_in_use:
+            global_dict_win["ports"].append(res)
+        port_is_in_use = False
+        res = random.randint(start, end)
+    global_dict_win["ports"].append(res)
+    return res
+
 def get_engine_zmq_addresses(
     vllm_config: VllmConfig,
     num_api_servers: int = 1,
@@ -921,17 +940,18 @@ def get_engine_zmq_addresses(
 
     # Set up input and output addresses.
     if platform.system() == "Windows":
-        input_address_port = 45974
-        output_address_port = 45975
+        #random unused ports for zmq sockets
+        inputs = []
+        outputs = []
+        for num_api_index in range(num_api_servers):
+            input_address_port = random_port_exclude(10000, 65534)
+            inputs.append(get_engine_client_zmq_addr(client_local_only, host, input_address_port))
+            output_address_port = random_port_exclude(10000, 65534)
+            outputs.append(get_engine_client_zmq_addr(client_local_only, host, output_address_port))
+
         addresses = EngineZmqAddresses(
-            inputs=[
-                get_engine_client_zmq_addr(client_local_only, host, input_address_port - num_api_index)
-                for num_api_index in range(num_api_servers)
-            ],
-            outputs=[
-                get_engine_client_zmq_addr(client_local_only, host, output_address_port + num_api_index)
-                for num_api_index in range(num_api_servers)
-            ],
+            inputs=inputs,
+            outputs=outputs,
         )
     else:
         addresses = EngineZmqAddresses(
