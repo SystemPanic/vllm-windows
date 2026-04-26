@@ -53,7 +53,8 @@ elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")
         "so vLLM may not be able to run correctly",
         sys.platform,
     )
-    VLLM_TARGET_DEVICE = "empty"
+    if os.getenv("VLLM_TARGET_DEVICE") is None:
+        VLLM_TARGET_DEVICE = "empty"
 elif sys.platform.startswith("linux") and os.getenv("VLLM_TARGET_DEVICE") is None:
     if torch.version.hip is not None:
         VLLM_TARGET_DEVICE = "rocm"
@@ -248,15 +249,17 @@ class cmake_build_ext(build_ext):
 
         # Pass the python executable to cmake so it can find an exact
         # match.
+        # Windows: convert backslashes for CMake
         python_exec_path = sys.executable
         if IS_WINDOWS:
-            python_exec_path = python_exec_path.replace('\\', '\\\\')
+            python_exec_path = python_exec_path.replace('\\', '/')
 
         cmake_args += ['-DVLLM_PYTHON_EXECUTABLE={}'.format(python_exec_path)]
 
         # Pass the python path to cmake so it can reuse the build dependencies
         # on subsequent calls to python.
-        cmake_args += ["-DVLLM_PYTHON_PATH={}".format(":".join(sys.path))]
+        py_path = ":".join(p.replace("\\", "/") for p in sys.path) if sys.platform == "win32" else ":".join(sys.path)
+        cmake_args += ["-DVLLM_PYTHON_PATH={}".format(py_path)]
 
         # Set correct cuda paths, cuda libs and options for CMake
         if VLLM_TARGET_DEVICE == 'cuda':
@@ -333,6 +336,15 @@ class cmake_build_ext(build_ext):
         fc_base_dir = os.path.join(ROOT_DIR, ".deps")
         fc_base_dir = os.environ.get("FETCHCONTENT_BASE_DIR", fc_base_dir)
         cmake_args += ["-DFETCHCONTENT_BASE_DIR={}".format(fc_base_dir)]
+
+        # Windows: pass resource compiler and manifest tool paths
+        if sys.platform == "win32":
+            rc = os.getenv("CMAKE_RC_COMPILER")
+            mt = os.getenv("CMAKE_MT")
+            if rc:
+                cmake_args += ["-DCMAKE_RC_COMPILER={}".format(rc)]
+            if mt:
+                cmake_args += ["-DCMAKE_MT={}".format(mt)]
 
         #
         # Setup parallelism and build tool
@@ -879,6 +891,9 @@ def _no_device() -> bool:
 
 def _is_cuda() -> bool:
     has_cuda = torch.version.cuda is not None
+    # On Windows, torch.version.cuda can be None in pip subprocess even with CUDA installed
+    if sys.platform == "win32" and VLLM_TARGET_DEVICE == "cuda" and not has_cuda:
+        has_cuda = True
     return VLLM_TARGET_DEVICE == "cuda" and has_cuda and not _is_tpu()
 
 
@@ -1018,7 +1033,8 @@ def get_requirements() -> list[str]:
         requirements = _read_requirements("common.txt")
     elif _is_cuda():
         requirements = _read_requirements("cuda.txt")
-        cuda_major, cuda_minor = torch.version.cuda.split(".")
+        cuda_ver = torch.version.cuda or os.getenv("CUDA_PATH", "").split("v")[-1] or "12.8"
+        cuda_major, cuda_minor = cuda_ver.split(".")[:2]
         modified_requirements = []
         for req in requirements:
             if "vllm-flash-attn" in req and cuda_major != "12":

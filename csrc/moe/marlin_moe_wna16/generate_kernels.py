@@ -252,10 +252,16 @@ KERNEL_SELECTOR_ENTRY_TEMPLATE = (
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
-        subprocess.call(RM_COMMAND + [filename])
+        try:
+            os.remove(filename)
+        except OSError:
+            pass
 
     filename = os.path.dirname(__file__) + "/kernel_selector.h"
-    subprocess.call(RM_COMMAND + [filename])
+    try:
+        os.remove(filename)
+    except OSError:
+        pass
 
 
 def generate_new_kernels():
@@ -321,11 +327,18 @@ def generate_new_kernels():
     # ------------------------------------------------------------------ #
     all_entries = []  # list of (a_type, b_type, c_type, config)
 
+    # MSVC fix: split into guarded if-blocks per type-group to avoid C1061 nesting limit
+    _group_bodies = []
+
     for result_dict_tmp in [result_dict, sm_75_result_dict]:
         for (a_type, b_type, c_type), config_list in result_dict_tmp.items():
             all_template_str_list = []
             if not config_list:
                 continue
+
+            group_body = ""
+            first_in_group = True
+
             for config in config_list:
                 all_entries.append((a_type, b_type, c_type, config))
 

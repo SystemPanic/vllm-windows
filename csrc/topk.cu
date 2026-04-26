@@ -322,13 +322,13 @@ FastTopKParams get_params(
     indices_ptr = indices.data_ptr<int32_t>();
   }
 
-  FastTopKParams p;
-  p.input        = score.data_ptr<float>();
-  p.row_starts   = row_starts_ptr;
-  p.indices      = indices_ptr;
-  p.lengths      = lengths.data_ptr<int32_t>();
-  p.input_stride = score.stride(0);
-  return p;
+  FastTopKParams params;
+  params.input = score.data_ptr<float>();
+  params.row_starts = row_starts_ptr;
+  params.indices = indices_ptr;
+  params.lengths = lengths.data_ptr<int32_t>();
+  params.input_stride = score.stride(0);
+  return params;
 }
 
 template <auto* kernel_func, size_t smem_bytes>

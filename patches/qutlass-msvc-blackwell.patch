@@ -1,0 +1,200 @@
+diff --git a/qutlass/csrc/include/cutlass_extensions/epilogue/fusion/sm100_visitor_store_tma_warpspecialized.hpp b/qutlass/csrc/include/cutlass_extensions/epilogue/fusion/sm100_visitor_store_tma_warpspecialized.hpp
+index d1952a1..8073704 100644
+--- a/qutlass/csrc/include/cutlass_extensions/epilogue/fusion/sm100_visitor_store_tma_warpspecialized.hpp
++++ b/qutlass/csrc/include/cutlass_extensions/epilogue/fusion/sm100_visitor_store_tma_warpspecialized.hpp
+@@ -59,12 +59,15 @@ using namespace detail;
+ CUTLASS_HOST_DEVICE
+ static uint8_t f32_to_e4m3_hi(float v) {
+   uint16_t packed;
+-  // 0.0f → lower 8 bits, v → upper 8 bits
++#if defined(__CUDA_ARCH__)
+   asm volatile(
+     "cvt.rn.satfinite.e4m3x2.f32 %0, %2, %1;\n"
+     : "=h"(packed)
+     : "f"(0.0f), "f"(v)
+   );
++#else
++  packed = 0;
++#endif
+   return uint8_t(packed >> 8);
+ }
+ 
+@@ -72,7 +75,8 @@ CUTLASS_HOST_DEVICE
+ static float e4m3_to_f32(uint8_t hi) {
+     uint16_t packed = uint16_t(hi) << 8;
+     uint32_t fp16x2;
+-
++    float out;
++#if defined(__CUDA_ARCH__)
+     asm volatile(
+         "cvt.rn.f16x2.e4m3x2 %0, %1;"
+         : "=r"(fp16x2)
+@@ -80,11 +84,14 @@ static float e4m3_to_f32(uint8_t hi) {
+ 
+     uint16_t fp16_hi = static_cast<uint16_t>(fp16x2 >> 16);
+ 
+-    float out;
+     asm volatile(
+         "cvt.f32.f16 %0, %1;"
+         : "=f"(out)
+         : "h"(fp16_hi));
++#else
++    fp16x2 = 0;
++    out = 0.0f;
++#endif
+     return out;
+ }
+ 
+@@ -92,7 +99,11 @@ static float e4m3_to_f32(uint8_t hi) {
+ CUTLASS_HOST_DEVICE
+ static float reciprocal_approximate_ftz(float a) {
+   float b;
++#if defined(__CUDA_ARCH__)
+   asm volatile("rcp.approx.ftz.f32 %0, %1;\n" : "=f"(b) : "f"(a));
++#else
++  b = 0.0f;
++#endif
+   return b;
+ }
+ 
+diff --git a/qutlass/csrc/include/cutlass_extensions/epilogue/threadblock/epilogue_quant.h b/qutlass/csrc/include/cutlass_extensions/epilogue/threadblock/epilogue_quant.h
+index f62e58c..e1f02df 100644
+--- a/qutlass/csrc/include/cutlass_extensions/epilogue/threadblock/epilogue_quant.h
++++ b/qutlass/csrc/include/cutlass_extensions/epilogue/threadblock/epilogue_quant.h
+@@ -78,6 +78,7 @@ CUTLASS_HOST_DEVICE
+ static uint32_t fp32_vec_to_e2m1(float* array)
+ {
+     uint32_t val;
++#if defined(__CUDA_ARCH__)
+     asm volatile(
+         "{\n"
+         ".reg .b8 byte0;\n"
+@@ -93,18 +94,26 @@ static uint32_t fp32_vec_to_e2m1(float* array)
+         : "=r"(val)
+         : "f"(array[0]), "f"(array[1]), "f"(array[2]), "f"(array[3]),
+         "f"(array[4]), "f"(array[5]), "f"(array[6]), "f"(array[7]));
++#else
++    // Host-side fallback (not reached at runtime; satisfies MSVC host parse)
++    val = 0;
++#endif
+     return val;
+ }
+ 
+ CUTLASS_HOST_DEVICE
+ static uint8_t f32_to_e4m3_hi(float v) {
+   uint16_t packed;
++#if defined(__CUDA_ARCH__)
+   // 0.0f → lower 8 bits, v → upper 8 bits
+   asm volatile(
+     "cvt.rn.satfinite.e4m3x2.f32 %0, %2, %1;\n"
+     : "=h"(packed)
+     : "f"(0.0f), "f"(v)
+   );
++#else
++  packed = 0;
++#endif
+   return uint8_t(packed >> 8);
+ }
+ 
+@@ -112,7 +121,8 @@ CUTLASS_HOST_DEVICE
+ static float e4m3_to_f32(uint8_t hi) {
+     uint16_t packed = uint16_t(hi) << 8;
+     uint32_t fp16x2;
+-
++    float out;
++#if defined(__CUDA_ARCH__)
+     asm volatile(
+         "cvt.rn.f16x2.e4m3x2 %0, %1;"
+         : "=r"(fp16x2)
+@@ -120,11 +130,14 @@ static float e4m3_to_f32(uint8_t hi) {
+ 
+     uint16_t fp16_hi = static_cast<uint16_t>(fp16x2 >> 16);
+ 
+-    float out;
+     asm volatile(
+         "cvt.f32.f16 %0, %1;"
+         : "=f"(out)
+         : "h"(fp16_hi));
++#else
++    fp16x2 = 0;
++    out = 0.0f;
++#endif
+     return out;
+ }
+ 
+@@ -132,7 +145,11 @@ static float e4m3_to_f32(uint8_t hi) {
+ CUTLASS_HOST_DEVICE
+ static float reciprocal_approximate_ftz(float a) {
+   float b;
++#if defined(__CUDA_ARCH__)
+   asm volatile("rcp.approx.ftz.f32 %0, %1;\n" : "=f"(b) : "f"(a));
++#else
++  b = (a != 0.0f) ? (1.0f / a) : 0.0f;
++#endif
+   return b;
+ }
+ 
+@@ -439,21 +456,21 @@ private:
+   struct EpilogueOpImpl<32, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_32(std::forward<Args>(args)...);
++      self.op_32(std::forward<Args>(args)...);
+     }
+   };
+   template<typename Epilogue>
+   struct EpilogueOpImpl<64, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_64(std::forward<Args>(args)...);
++      self.op_64(std::forward<Args>(args)...);
+     }
+   };
+   template<typename Epilogue>
+   struct EpilogueOpImpl<128, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_128(std::forward<Args>(args)...);
++      self.op_128(std::forward<Args>(args)...);
+     }
+   };
+ 
+@@ -1100,28 +1117,28 @@ private:
+   struct EpilogueOpImpl<16, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_16(std::forward<Args>(args)...);
++      self.op_16(std::forward<Args>(args)...);
+     }
+   };
+   template<typename Epilogue>
+   struct EpilogueOpImpl<32, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_32(std::forward<Args>(args)...);
++      self.op_32(std::forward<Args>(args)...);
+     }
+   };
+   template<typename Epilogue>
+   struct EpilogueOpImpl<64, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_64(std::forward<Args>(args)...);
++      self.op_64(std::forward<Args>(args)...);
+     }
+   };
+   template<typename Epilogue>
+   struct EpilogueOpImpl<128, Epilogue> {
+     template<typename... Args>
+     CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
+-      self.template op_128(std::forward<Args>(args)...);
++      self.op_128(std::forward<Args>(args)...);
+     }
+   };
+ 
+diff --git a/third_party/cutlass b/third_party/cutlass
+--- a/third_party/cutlass
++++ b/third_party/cutlass
+@@ -1 +1 @@
+-Subproject commit b2dd65dc864e09688245b316ac46c4a6cd07e15c
++Subproject commit b2dd65dc864e09688245b316ac46c4a6cd07e15c-dirty

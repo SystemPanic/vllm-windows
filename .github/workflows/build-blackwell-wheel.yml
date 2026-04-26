@@ -1,0 +1,137 @@
+name: Build Windows Blackwell Wheel
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: 'Python version'
+        required: false
+        default: '3.10'
+        type: choice
+        options:
+          - '3.10'
+          - '3.12'
+      cuda-version:
+        description: 'CUDA toolkit version'
+        required: false
+        default: '12.8'
+        type: choice
+        options:
+          - '12.8'
+      torch-index:
+        description: 'PyTorch index URL suffix (cu128 or cu126)'
+        required: false
+        default: 'cu128'
+        type: string
+
+env:
+  CUDA_VERSION: ${{ inputs.cuda-version || '12.8' }}
+  PYTHON_VERSION: ${{ inputs.python-version || '3.10' }}
+
+jobs:
+  build:
+    name: vLLM sm_120a (CUDA ${{ inputs.cuda-version || '12.8' }}, Py ${{ inputs.python-version || '3.10' }})
+    runs-on: windows-2022
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install CUDA 12.8 from NVIDIA redistributable archives (fast, no full installer)
+      - name: Install CUDA Toolkit ${{ env.CUDA_VERSION }}
+        env:
+          CUDA_INSTALL_DIR: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v${{ env.CUDA_VERSION }}"
+          CUDA_REDIST_BASE: "https://developer.download.nvidia.com/compute/cuda/redist"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $components = @(
+            "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.8.57-archive.zip",
+            "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.8.93-archive.zip",
+            "cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-12.8.89-archive.zip",
+            "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-12.8.55-archive.zip",
+            "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.8.55-archive.zip",
+            "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.8.55-archive.zip",
+            "libcublas/windows-x86_64/libcublas-windows-x86_64-12.8.3.14-archive.zip",
+            "libcusparse/windows-x86_64/libcusparse-windows-x86_64-12.5.7.1-archive.zip",
+            "libcusolver/windows-x86_64/libcusolver-windows-x86_64-11.7.2.55-archive.zip",
+            "visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-12.8.55-archive.zip"
+          )
+          New-Item -ItemType Directory -Force -Path "$env:CUDA_INSTALL_DIR" | Out-Null
+          $tempDir = New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\cuda_components"
+          foreach ($component in $components) {
+            $url = "$env:CUDA_REDIST_BASE/$component"
+            $fileName = Split-Path $component -Leaf
+            $zipPath = Join-Path $tempDir $fileName
+            $extractDir = Join-Path $tempDir ($fileName -replace '\.zip$', '')
+            Write-Host "Downloading $fileName ..."
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -MaximumRetryCount 3 -RetryIntervalSec 5
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+            $innerDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
+            Copy-Item -Path "$($innerDir.FullName)\*" -Destination "$env:CUDA_INSTALL_DIR" -Recurse -Force
+            Remove-Item -Path $zipPath -Force
+            Remove-Item -Path $extractDir -Recurse -Force
+          }
+          echo "CUDA_HOME=$env:CUDA_INSTALL_DIR" >> $env:GITHUB_ENV
+          echo "CUDA_PATH=$env:CUDA_INSTALL_DIR" >> $env:GITHUB_ENV
+          echo "$env:CUDA_INSTALL_DIR\bin" >> $env:GITHUB_PATH
+
+      - name: Verify CUDA
+        run: nvcc --version
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Install PyTorch cu128
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install torch --index-url https://download.pytorch.org/whl/${{ inputs.torch-index || 'cu128' }}
+          python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA {torch.version.cuda}')"
+
+      - name: Install build deps
+        run: |
+          python -m pip install ninja packaging numpy jinja2
+
+      - name: Fetch dependencies
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
+          $env:TORCH_CUDA_ARCH_LIST = "12.0a+PTX"
+          $env:VLLM_TARGET_DEVICE = "cuda"
+          $env:FETCHCONTENT_FULLY_DISCONNECTED = "OFF"
+          $env:MAX_JOBS = "2"
+          # Run cmake configure to fetch deps
+          python setup.py build_ext --inplace 2>&1 | Select-String -Pattern "FetchContent" | Select-Object -First 5
+          # This will likely fail on first run but .deps will be populated
+
+      - name: Apply MSVC Blackwell patches to .deps
+        run: python patches/apply_msvc_patches.py
+
+      - name: Build wheel
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
+          $env:TORCH_CUDA_ARCH_LIST = "12.0a+PTX"
+          $env:VLLM_TARGET_DEVICE = "cuda"
+          $env:FETCHCONTENT_FULLY_DISCONNECTED = "ON"
+          $env:MAX_JOBS = "2"
+          $env:NVCC_THREADS = "2"
+          python setup.py bdist_wheel --dist-dir=dist
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: vllm-cu${{ env.CUDA_VERSION }}-sm120a-py${{ env.PYTHON_VERSION }}-win-amd64
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 90

@@ -16,6 +16,23 @@ project(vllm_extensions LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# CRITICAL FIX: MSVC with C++17 auto-adds /permissive-, strip it to fix PyTorch compiled_autograd.h
+if(MSVC)
+ string(REPLACE "/permissive-" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+ string(REPLACE "/permissive-" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+ string(REPLACE "/permissive-" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+ string(REPLACE "/permissive-" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ string(REPLACE "/permissive-" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+ string(REPLACE "/permissive-" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+ # Also fix CUDA host compiler: nvcc passes flags to MSVC via -Xcompiler,
+ # and MSVC C++17 implies /permissive- which breaks torch compiled_autograd.h.
+ # Strip /permissive- from CUDA flags and add explicit /permissive via -Xcompiler.
+ string(REPLACE "/permissive-" "" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+ string(REPLACE "/permissive-" "" CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
+ string(REPLACE "/permissive-" "" CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
+ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/permissive -Xcompiler=/Zc:twoPhase- --extended-lambda")
+endif()
+
 
 # CUDA by default, can be overridden by using -DVLLM_TARGET_DEVICE=... (used by setup.py)
 set(VLLM_TARGET_DEVICE "cuda" CACHE STRING "Target device backend for vLLM")
@@ -88,6 +105,30 @@ endif()
 # so there is no need to do this explicitly with check_language/enable_language,
 # etc.
 #
+# Windows: enable CUDA language and find CUDA toolkit explicitly
+if(VLLM_TARGET_DEVICE STREQUAL "cuda")
+  # Set CMAKE_CUDA_ARCHITECTURES from TORCH_CUDA_ARCH_LIST before
+  # enable_language(CUDA) to prevent cmake from auto-detecting the GPU
+  # and adding unwanted default arch (e.g. compute_52) via --generate-code.
+  if(DEFINED ENV{TORCH_CUDA_ARCH_LIST} AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    string(REPLACE "+" ";" _TCA "$ENV{TORCH_CUDA_ARCH_LIST}")
+    string(REPLACE " " ";" _TCA "${_TCA}")
+    set(_ARCH_LIST)
+    foreach(_E ${_TCA})
+      if(_E MATCHES "^([0-9]+)\\.([0-9]+)([af]?)$")
+        list(APPEND _ARCH_LIST "${CMAKE_MATCH_1}${CMAKE_MATCH_2}${CMAKE_MATCH_3}")
+      endif()
+    endforeach()
+    if(_ARCH_LIST)
+      set(CMAKE_CUDA_ARCHITECTURES ${_ARCH_LIST})
+      message(STATUS "Set CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES} from TORCH_CUDA_ARCH_LIST")
+    endif()
+  endif()
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(CUDA_FOUND TRUE)
+  set(CUDA_VERSION "${CUDAToolkit_VERSION}")
+endif()
 find_package(Torch REQUIRED)
 
 # Supported NVIDIA architectures.
@@ -154,6 +195,38 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   #
   clear_cuda_arches(CUDA_ARCH_FLAGS)
   extract_unique_cuda_archs_ascending(CUDA_ARCHS "${CUDA_ARCH_FLAGS}")
+  # Windows fix: when enable_language(CUDA) is called before find_package(Torch),
+  # Torch does not inject -gencode flags into CMAKE_CUDA_FLAGS.
+  # Fall back to parsing TORCH_CUDA_ARCH_LIST env var.
+  if(NOT CUDA_ARCHS)
+    set(_TORCH_ARCH_LIST "$ENV{TORCH_CUDA_ARCH_LIST}")
+    if(_TORCH_ARCH_LIST)
+      message(STATUS "CUDA_ARCHS empty, parsing TORCH_CUDA_ARCH_LIST=${_TORCH_ARCH_LIST}")
+      # Parse entries like "7.0 7.5 8.0+PTX 12.0+PTX" into gencode flags
+      string(REPLACE "+" ";" _ARCH_ENTRIES "${_TORCH_ARCH_LIST}")
+      string(REPLACE " " ";" _ARCH_ENTRIES "${_ARCH_ENTRIES}")
+      set(_PARSED_ARCHS)
+      foreach(_ENTRY ${_ARCH_ENTRIES})
+        if(_ENTRY MATCHES "^[0-9]+\\.[0-9][af]?$")
+          list(APPEND _PARSED_ARCHS "${_ENTRY}")
+        endif()
+      endforeach()
+      if(_PARSED_ARCHS)
+        set(CUDA_ARCHS ${_PARSED_ARCHS})
+        # Also add gencode flags to CMAKE_CUDA_FLAGS for the default target
+        foreach(_ARCH ${_PARSED_ARCHS})
+          string(REPLACE "." "" _ARCH_COMPACT "${_ARCH}")
+          set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${_ARCH_COMPACT},code=sm_${_ARCH_COMPACT}")
+        endforeach()
+        # Add PTX for the highest arch if +PTX was requested
+        if(_TORCH_ARCH_LIST MATCHES "PTX")
+          list(GET _PARSED_ARCHS -1 _LAST_ARCH)
+          string(REPLACE "." "" _LAST_COMPACT "${_LAST_ARCH}")
+          set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${_LAST_COMPACT},code=compute_${_LAST_COMPACT}")
+        endif()
+      endif()
+    endif()
+  endif()
   message(STATUS "CUDA target architectures: ${CUDA_ARCHS}")
   # Filter the target architectures by the supported supported archs
   # since for some files we will build for all CUDA_ARCHS.
@@ -198,9 +271,9 @@ endif()
 # Set CUDA include flags for CXX compiler.
 #
 if(VLLM_GPU_LANG STREQUAL "CUDA")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CUDA_TOOLKIT_ROOT_DIR}/include")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \"-I${CUDA_TOOLKIT_ROOT_DIR}/include\"")
   if(CUDA_VERSION VERSION_GREATER_EQUAL 13.0)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CUDA_TOOLKIT_ROOT_DIR}/include/cccl")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \"-I${CUDA_TOOLKIT_ROOT_DIR}/include/cccl\"")
   endif()
 endif()
 
@@ -388,6 +461,10 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   # marlin arches for other files
   cuda_archs_loose_intersection(MARLIN_OTHER_ARCHS "7.5;8.0+PTX" "${CUDA_ARCHS}")
 
+  # MSVC C1061 "blocks nested too deeply" workaround for kernel_selector.h:
+  # the /d1deepNest undocumented flag raises MSVC's block nesting limit.
+  # Applied below to marlin.cu (and MOE ops.cu) which #include kernel_selector.h.
+
   if (MARLIN_OTHER_ARCHS)
 
     #
@@ -485,6 +562,11 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
     if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8)
       set_source_files_properties(${MARLIN_SRCS}
         PROPERTIES COMPILE_FLAGS "-static-global-template-stub=false")
+    endif()
+    # MSVC C1061 fix: marlin.cu #includes kernel_selector.h with 1800+ else-if branches
+    if(MSVC)
+      set_property(SOURCE "csrc/quantization/marlin/marlin.cu"
+        APPEND_STRING PROPERTY COMPILE_FLAGS "")
     endif()
     list(APPEND VLLM_EXT_SRC "${MARLIN_SRCS}")
 
@@ -706,6 +788,12 @@ endif()
 # driver API. This causes problems when linking with earlier versions of CUDA.
 # Setting this variable sidesteps the issue by calling the driver directly.
 target_compile_definitions(_C PRIVATE CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1)
+# On Windows + CUDA, define USE_CUDA so that torch headers (e.g.
+# compiled_autograd.h) can skip code paths that trigger NVCC+MSVC
+# C2872 ambiguous-symbol errors with ::std namespace.
+if(MSVC AND VLLM_GPU_LANG STREQUAL "CUDA")
+  target_compile_definitions(_C PRIVATE USE_CUDA=1)
+endif()
 
 # add OR VLLM_GPU_LANG STREQUAL "HIP" here once
 # https://github.com/vllm-project/vllm/issues/35163 is resolved
@@ -889,10 +977,15 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
     endif()
   endif()
 
+  if(NOT MSVC)
   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 13.0)
     cuda_archs_loose_intersection(SCALED_MM_ARCHS "10.0f;11.0f" "${CUDA_ARCHS}")
   else()
     cuda_archs_loose_intersection(SCALED_MM_ARCHS "10.0a;10.1a;10.3a" "${CUDA_ARCHS}")
+  endif()
+  else()
+    set(SCALED_MM_ARCHS)
+    message(STATUS "sm100 MOE kernels disabled for MSVC")
   endif()
   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8 AND SCALED_MM_ARCHS)
     set(SRCS "csrc/libtorch_stable/quantization/w8a8/cutlass/moe/grouped_mm_c3x_sm100.cu")
@@ -1202,6 +1295,11 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
       set_source_files_properties(${MARLIN_MOE_OTHER_SRC}
         PROPERTIES COMPILE_FLAGS "-static-global-template-stub=false")
     endif()
+    # MSVC C1061 fix: ops.cu #includes kernel_selector.h with 1800+ else-if branches
+    if(MSVC)
+      set_property(SOURCE "csrc/moe/marlin_moe_wna16/ops.cu"
+        APPEND_STRING PROPERTY COMPILE_FLAGS "")
+    endif()
     list(APPEND VLLM_MOE_EXT_SRC "${MARLIN_MOE_OTHER_SRC}")
 
     message(STATUS "Building Marlin MOE kernels for archs: ${MARLIN_MOE_OTHER_ARCHS}")
@@ -1247,6 +1345,9 @@ define_extension_target(
 
 if(VLLM_GPU_LANG STREQUAL "CUDA" AND WIN32)
   target_link_libraries(_moe_C PRIVATE ${CUDA_TOOLKIT_ROOT_DIR}/lib/x64/cublas.lib)
+endif()
+if(MSVC AND VLLM_GPU_LANG STREQUAL "CUDA")
+  target_compile_definitions(_moe_C PRIVATE USE_CUDA=1)
 endif()
 
 if(VLLM_GPU_LANG STREQUAL "HIP")

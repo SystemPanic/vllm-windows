@@ -419,28 +419,55 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
     }
 }
 
+// Helper to launch the kernel with all template booleans resolved at compile
+// time.  Avoids BOOL_SWITCH lambdas which trigger C2975 on NVCC+MSVC because
+// the constexpr bool captured in the lambda is not treated as a compile-time
+// constant by the host compiler.
+template<int kNThreads, int kNItems, bool kIsEvenLen, bool kHasZ, bool kVarlen,
+         typename input_t, typename weight_t, typename state_t>
+void selective_scan_fwd_launch_inner(SSMParamsBase &params, cudaStream_t stream) {
+    constexpr int kNRows = 1;
+    constexpr bool kIsVariableB = true;
+    constexpr bool kIsVariableC = true;
+    using Ktraits = Selective_Scan_fwd_kernel_traits<kNThreads, kNItems, kNRows, kIsEvenLen, kIsVariableB, kIsVariableC, kHasZ, kVarlen, input_t, weight_t, state_t>;
+    constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
+    dim3 grid(params.batch, params.dim / kNRows);
+    auto kernel = &selective_scan_fwd_kernel<Ktraits>;
+    if (kSmemSize >= 48 * 1024) {
+        C10_CUDA_CHECK(cudaFuncSetAttribute(
+            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+    }
+    kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
 template<int kNThreads, int kNItems, typename input_t, typename weight_t, typename state_t>
 void selective_scan_fwd_launch(SSMParamsBase &params, cudaStream_t stream) {
-    // Only kNRows == 1 is tested for now, which ofc doesn't differ from previously when we had each block
-    // processing 1 row.
-    static constexpr int kNRows = 1;
-    // kIsVariableB, kIsVariableC and kHasZ are all set to True to reduce binary size
-	static constexpr bool kIsVariableB = true;
-    static constexpr bool kIsVariableC = true;
-    static constexpr bool kHasZ = true;
-    BOOL_SWITCH(params.seqlen % (kNThreads * kNItems) == 0, kIsEvenLen, [&] {
-        BOOL_SWITCH(params.z_ptr != nullptr , kHasZ, [&] {
-            BOOL_SWITCH(params.query_start_loc_ptr != nullptr , kVarlen, [&] {
-                using Ktraits = Selective_Scan_fwd_kernel_traits<kNThreads, kNItems, kNRows, kIsEvenLen, kIsVariableB, kIsVariableC, kHasZ,  kVarlen, input_t, weight_t, state_t>;
-                static constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
-                dim3 grid(params.batch, params.dim / kNRows);
-                auto kernel = &selective_scan_fwd_kernel<Ktraits>;
-                set_max_dynamic_shared_memory(kernel, kSmemSize);
-                kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
-            });
-        });
-    });
+    bool isEvenLen = params.seqlen % (kNThreads * kNItems) == 0;
+    bool hasZ = params.z_ptr != nullptr;
+    bool isVarlen = params.query_start_loc_ptr != nullptr;
+    // Manual 3-bool dispatch (8 combinations) to keep all template args
+    // as compile-time constants for NVCC+MSVC compatibility.
+    #define LAUNCH(E, Z, V) \
+        selective_scan_fwd_launch_inner<kNThreads, kNItems, E, Z, V, input_t, weight_t, state_t>(params, stream)
+    if (isEvenLen) {
+        if (hasZ) {
+            if (isVarlen) { LAUNCH(true, true, true); }
+            else          { LAUNCH(true, true, false); }
+        } else {
+            if (isVarlen) { LAUNCH(true, false, true); }
+            else          { LAUNCH(true, false, false); }
+        }
+    } else {
+        if (hasZ) {
+            if (isVarlen) { LAUNCH(false, true, true); }
+            else          { LAUNCH(false, true, false); }
+        } else {
+            if (isVarlen) { LAUNCH(false, false, true); }
+            else          { LAUNCH(false, false, false); }
+        }
+    }
+    #undef LAUNCH
 }
 
 template<typename input_t, typename weight_t, typename state_t>

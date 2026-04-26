@@ -198,6 +198,10 @@ macro(clear_cuda_arches CUDA_ARCH_FLAGS)
     # and passed back via the `CUDA_ARCHITECTURES` property.
     string(REGEX REPLACE "-gencode arch=[^ ]+ *" "" CMAKE_CUDA_FLAGS
       ${CMAKE_CUDA_FLAGS})
+    # Also remove --generate-code= format (used by cmake's CUDA language support
+    # on Windows with MSVC) to avoid compiling for unwanted default archs.
+    string(REGEX REPLACE "\"?--generate-code=arch=[^\"]+(\"| )" "" CMAKE_CUDA_FLAGS
+      "${CMAKE_CUDA_FLAGS}")
 endmacro()
 
 #

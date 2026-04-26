@@ -3,6 +3,13 @@
 // need to be unsigned long long
 #include <iostream>
 
+// MSVC does not define ssize_t (it is a POSIX type).
+// Define it before any header that might use it.
+#ifdef _MSC_VER
+  #include <BaseTsd.h>
+  typedef SSIZE_T ssize_t;
+#endif
+
 #include "cumem_allocator_compat.h"
 
 #ifndef USE_ROCM

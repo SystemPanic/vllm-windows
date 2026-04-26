@@ -21,6 +21,11 @@
 #include <torch/cuda.h>
 #include <c10/cuda/CUDAGuard.h>
 
+// MSVC does not define 'uint' (it is a GNU/POSIX extension).
+#ifdef _MSC_VER
+typedef unsigned int uint;
+#endif
+
 #include "cuda_compat.h"
 #include "dispatch_utils.h"
 #include "type_convert.cuh"

@@ -5,6 +5,11 @@
 #include <algorithm>
 #include <limits>
 
+// MSVC does not define 'uint' (it is a GNU/POSIX extension).
+#ifdef _MSC_VER
+typedef unsigned int uint;
+#endif
+
 #include "attention_dtypes.h"
 #include "attention_utils.cuh"
 #include "../quantization/w8a8/fp8/common.cuh"

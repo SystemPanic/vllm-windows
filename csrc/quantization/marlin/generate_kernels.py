@@ -252,10 +252,16 @@ KERNEL_SELECTOR_ENTRY_TEMPLATE = (
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
-        subprocess.call(RM_COMMAND + [filename])
+        try:
+            os.remove(filename)
+        except OSError:
+            pass
 
     filename = os.path.dirname(__file__) + "/kernel_selector.h"
-    subprocess.call(RM_COMMAND + [filename])
+    try:
+        os.remove(filename)
+    except OSError:
+        pass
 
 
 def generate_new_kernels():
@@ -322,11 +328,23 @@ def generate_new_kernels():
     # ------------------------------------------------------------------ #
     all_entries = []  # list of (a_type, b_type, c_type, config) tuples
 
+    # MSVC fix: split into sub-functions to avoid C1061 nesting limit
+    _subfunc_defs = []
+    _subfunc_calls = []
+    _subfunc_idx = 0
+
     for result_dict_tmp in [result_dict, sm_75_result_dict]:
         for (a_type, b_type, c_type), config_list in result_dict_tmp.items():
             all_template_str_list = []
             if not config_list:
                 continue
+
+            # Start a new sub-function for this type combo
+            fname = f"_select_marlin_{_subfunc_idx}"
+            _subfunc_idx += 1
+            subfunc_body = ""
+            first_in_group = True
+
             for config in config_list:
                 all_entries.append((a_type, b_type, c_type, config))
 

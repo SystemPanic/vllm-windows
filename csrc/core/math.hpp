@@ -3,6 +3,15 @@
 #include <climits>
 #include <iostream>
 
+#ifdef _MSC_VER
+// MSVC constexpr-friendly implementation (no __builtin_clz).
+inline constexpr uint32_t next_pow_2(uint32_t const num) {
+  if (num <= 1) return num;
+  uint32_t v = num - 1;
+  v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+  return v + 1;
+}
+#else
 inline constexpr uint32_t next_pow_2(uint32_t const num) {
   if (num <= 1) return num;
 #ifdef _WIN32
@@ -11,6 +20,7 @@ inline constexpr uint32_t next_pow_2(uint32_t const num) {
   return 1 << (CHAR_BIT * sizeof(num) - __builtin_clz(num - 1));
 #endif
 }
+#endif
 
 template <typename A, typename B>
 static inline constexpr auto div_ceil(A a, B b) {

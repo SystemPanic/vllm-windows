@@ -221,9 +221,9 @@ constexpr __nv_bfloat16 get_fp8_max() {
   static_assert(std::is_same_v<T, c10::Float8_e4m3fn> ||
                 std::is_same_v<T, c10::Float8_e4m3fnuz>);
   if constexpr (std::is_same_v<T, c10::Float8_e4m3fn>) {
-    return __nv_bfloat16(__nv_bfloat16_raw{17376});
+    __nv_bfloat16_raw r; r.x = 17376; return __nv_bfloat16(r);
   } else {
-    return __nv_bfloat16(__nv_bfloat16_raw{17264});
+    __nv_bfloat16_raw r; r.x = 17264; return __nv_bfloat16(r);
   }
 }
 
@@ -232,9 +232,9 @@ constexpr __nv_bfloat16 get_fp8_min() {
   static_assert(std::is_same_v<T, c10::Float8_e4m3fn> ||
                 std::is_same_v<T, c10::Float8_e4m3fnuz>);
   if constexpr (std::is_same_v<T, c10::Float8_e4m3fn>) {
-    return __nv_bfloat16(__nv_bfloat16_raw{50144});
+    __nv_bfloat16_raw r; r.x = 50144; return __nv_bfloat16(r);
   } else {
-    return __nv_bfloat16(__nv_bfloat16_raw{50032});
+    __nv_bfloat16_raw r; r.x = 50032; return __nv_bfloat16(r);
   }
 }
 
@@ -283,6 +283,9 @@ __device__ __forceinline__ void token_bounds(int32_t n_tokens,
   }
 }
 
+// MSVC does not support __int128_t or __int64_t GCC builtins used in this
+// kernel.  Disable the entire kernel on Windows.
+#ifndef _MSC_VER
 template <int BLOCK_COUNT, int SMEM_SIZE_BYTES_Y, typename fp8_type,
           typename scale_t, int THREADS, typename Idx_t, bool CEIL_UE8M0,
           int GROUP_SIZE = 128, int NUM_STAGES = 3>
@@ -568,6 +571,7 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
   }
 #endif
 }
+#endif  // !_MSC_VER  (silu_mul_fp8_quant_deep_gemm_kernel)
 
 }  // namespace vllm
 
@@ -608,7 +612,9 @@ void persistent_masked_m_silu_mul_quant(
     at::Tensor& y_q,                      // (E, T, H) [OUT]
     at::Tensor& y_s,                      // (E, T, H//group_size) [OUT]
     bool cast_scale_ue8m0) {
-#ifndef USE_ROCM
+#if defined(_MSC_VER)
+  TORCH_CHECK(false, "persistent_masked_m_silu_mul_quant not supported on Windows");
+#elif !defined(USE_ROCM)
 
   // This kernel currently only supports H % 128 == 0 and assumes a
   // fixed GROUP_SIZE of 128.

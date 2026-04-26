@@ -208,21 +208,36 @@ void runMla(
   CUTLASS_CHECK(fmha.run(arguments, workspace.data_ptr(), stream));
 }
 
-// MSVC (C2975) rejects constexpr bool locals captured in lambdas as template
-// arguments because it does not treat them as integral constant expressions at
-// the point of instantiation.  The fix is to encode the boolean as a type
-// (std::integral_constant<bool, V>) and pass that type as a template parameter
-// so the compiler can see it is a compile-time constant.  Each lambda receives
-// a typed tag value; callers recover the bool via decltype(tag)::value or the
-// ::value member directly.
-#define DISPATCH_BOOL(expr, const_expr, ...)                                    \
-  [&]() -> bool {                                                               \
-    if (expr) {                                                                 \
-      return __VA_ARGS__(std::integral_constant<bool, true>{});                 \
-    } else {                                                                    \
-      return __VA_ARGS__(std::integral_constant<bool, false>{});                \
-    }                                                                           \
-  }()
+// MSVC workaround: manually expand the 2x2 bool dispatch (IsPaged128 x
+// IsPersistent) so every template argument is a literal true/false.
+// MSVC C2975 rejects constexpr locals as non-type template args.
+template <bool IsPaged128Val, bool PersistentVal>
+void runMlaDispatched(
+    at::ScalarType in_dtype,
+    at::Tensor const& out,
+    at::Tensor const& lse,
+    at::Tensor const& q_nope,
+    at::Tensor const& q_pe,
+    at::Tensor const& kv_c_and_k_pe_cache,
+    at::Tensor const& seq_lens,
+    at::Tensor const& page_table,
+    at::Tensor const& workspace,
+    double sm_scale,
+    int64_t num_kv_splits,
+    cudaStream_t stream) {
+  if (in_dtype == at::ScalarType::Half) {
+    runMla<cutlass::half_t, cutlass::half_t, IsPaged128Val, IsPersistent<PersistentVal>>(
+      out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else if (in_dtype == at::ScalarType::BFloat16) {
+    runMla<cutlass::bfloat16_t, cutlass::bfloat16_t, IsPaged128Val, IsPersistent<PersistentVal>>(
+      out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else if (in_dtype == at::ScalarType::Float8_e4m3fn) {
+    runMla<cutlass::float_e4m3_t, cutlass::bfloat16_t, IsPaged128Val, IsPersistent<PersistentVal>>(
+      out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else {
+    TORCH_CHECK(false, "Unsupported input data type of MLA");
+  }
+}
 
 void sm100_cutlass_mla_decode(
     torch::Tensor const& out,
@@ -235,34 +250,26 @@ void sm100_cutlass_mla_decode(
     torch::Tensor const& workspace,
     double sm_scale,
     int64_t num_kv_splits) {
-  auto in_dtype = q_nope.dtype();
+  auto in_dtype = q_nope.scalar_type();
   at::cuda::CUDAGuard device_guard{(char)q_nope.get_device()};
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream(q_nope.get_device());
   const int page_size = kv_c_and_k_pe_cache.sizes()[1];
-  
+
   // NOTE(alcanderian): IsPersistent has bug with manual split_kv.
   // Kernel will hang if batch is too large with large num_kv_splits. (for example bs=8, num_kv_splits=8)
   // Maybe per batch split kv will fix this.
-  DISPATCH_BOOL(page_size == 128, IsPaged128, [&](auto isPaged128Tag) {
-    constexpr bool IsPaged128 = decltype(isPaged128Tag)::value;
-    DISPATCH_BOOL(num_kv_splits <= 1, NotManualSplitKV, [&](auto notManualSplitKVTag) {
-      constexpr bool NotManualSplitKV = decltype(notManualSplitKVTag)::value;
-      if (in_dtype == at::ScalarType::Half) {
-        runMla<cutlass::half_t, cutlass::half_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
-          out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
-      } else if (in_dtype == at::ScalarType::BFloat16) {
-        runMla<cutlass::bfloat16_t, cutlass::bfloat16_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
-          out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
-      } else if (in_dtype == at::ScalarType::Float8_e4m3fn) {
-        runMla<cutlass::float_e4m3_t, cutlass::bfloat16_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
-          out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
-      } else {
-        TORCH_CHECK(false, "Unsupported input data type of MLA");
-      }
-      return true;
-    });
-    return true;
-  });
+  const bool is_paged_128 = (page_size == 128);
+  const bool not_manual_split = (num_kv_splits <= 1);
+
+  if (is_paged_128 && not_manual_split) {
+    runMlaDispatched<true, true>(in_dtype, out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else if (is_paged_128 && !not_manual_split) {
+    runMlaDispatched<true, false>(in_dtype, out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else if (!is_paged_128 && not_manual_split) {
+    runMlaDispatched<false, true>(in_dtype, out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  } else {
+    runMlaDispatched<false, false>(in_dtype, out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
+  }
 }
 
 int64_t sm100_cutlass_mla_get_workspace_size(int64_t max_seq_len, int64_t num_batches, int64_t sm_count, int64_t num_kv_splits) {

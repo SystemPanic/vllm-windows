@@ -1,3 +1,8 @@
+// MSVC does not define 'uint' (it is a GNU/POSIX extension).
+#ifdef _MSC_VER
+typedef unsigned int uint;
+#endif
+
 #include "allspark_utils.cuh"
 #include <torch/all.h>
 #include "core/registration.h"
