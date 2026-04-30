@@ -14,11 +14,6 @@ Easy, fast, and cheap LLM serving for everyone
 | <a href="https://docs.vllm.ai"><b>Documentation</b></a> | <a href="https://blog.vllm.ai/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2309.06180"><b>Paper</b></a> | <a href="https://x.com/vllm_project"><b>Twitter/X</b></a> | <a href="https://discuss.vllm.ai"><b>User Forum</b></a> | <a href="https://slack.vllm.ai"><b>Developer Slack</b></a> |
 </p>
 
-🔥 We have built a vLLM website to help you get started with vLLM. Please visit [vllm.ai](https://vllm.ai) to learn more.
-For events, please visit [vllm.ai/events](https://vllm.ai/events) to join us.
-
----
-
 ## vLLM for Windows
 
 vLLM for Windows build & kernels. This repository will be updated when new versions of vLLM are released.
@@ -28,6 +23,18 @@ vLLM for Windows build & kernels. This repository will be updated when new versi
 **Don't open Issues for general vLLM questions or non Windows related problems. Only Windows specific issues.** Any Issue opened that is not Windows specific will be closed automatically.
 
 **Don't request a wheel for your specific environment.** If your environment does not match the released wheel, build your own wheel from source by following the [instructions below](https://github.com/SystemPanic/vllm-windows?tab=readme-ov-file#building-from-source).
+
+#### NEW FEATURE 🔥 CUDA 13 + Blackwell GPU support on Windows
+
+#### NEW FEATURE 🔥 NCCL + Tensor / Pipeline parallelism for multi-gpu inference support on Windows
+
+1. Follow the instructions [here](https://github.com/SystemPanic/nccl-windows/tree/nccl-windows#building-from-source) to compile NCCL for your system.
+
+2. After build, add `set VLLM_NCCL_SO_PATH=YOUR_NCCL_BUILD_INSTALL_DIR`, where YOUR_NCCL_BUILD_INSTALL_DIR is for example C:\nccl-windows\install
+
+3. Serve the model with tensor-parallel-size or pipeline-parallel-size, for example `vllm serve YOUR_MODEL --port 8000 --host 127.0.0.1 --max-model-len 16384 --trust-remote-code --max-num-seqs 1 --gpu_memory_utilization 0.8 --pipeline-parallel-size 2`
+
+### Special thanks to NVIDIA for supporting the project with an RTX 5090 and RTX 6000 PRO Blackwell
 
 ### Windows instructions:
 
@@ -80,10 +87,16 @@ set CUDNN_INCLUDE_PATH=PATH_TO_CUDNN_INSTALL_DIR\include\CUDNN_CUDA_VERSION
 set VLLM_FORCE_FA3_WINDOWS_BUILD=1
 
 ```
+
+##### IMPORTANT FOR CUDA 13.0 TO CUDA 13.2 BUILDS:
+CUDA 13.0 to CUDA 13.2 cuda.h currently has 128 byte alignment. MSVC does not support yet passing over-aligned types like alignas(128) by value as function parameters. CUDA 13.3 will revert back to 64 byte alignment, but if you have installed a CUDA 13 version before 13.3, you need to patch it.
+
+To patch, open an elevated command line (execute cmd.exe as Administrator), and run `python C:\vllm-windows\fix_cuda_13_align.py` once time before building the project.
+
 6. Build & install:
 ```
-#With torch 2.11 cuda 12.6 (change cu126 with your installed CUDA version)
-pip install --pre torch==2.11.0.dev20260216+cu126 torchvision==0.26.0.dev20260216+cu126 torchaudio==2.11.0.dev20260216+cu126 --index-url https://download.pytorch.org/whl/nightly/cu126
+#With torch 2.11 CUDA 13 (change cu130 with your installed CUDA version)
+pip install torch==2.11+cu130 torchaudio==2.11+cu130 torchvision==0.26.0+cu130 --index-url https://download.pytorch.org/whl/cu130
 
 #With your already installed torch cuda version (make sure you have torch cuda installed if you use a virtual environment)
 python use_existing_torch.py
@@ -95,6 +108,9 @@ pip install . --no-build-isolation
 ```
 
 ---
+
+🔥 We have built a vLLM website to help you get started with vLLM. Please visit [vllm.ai](https://vllm.ai) to learn more.
+For events, please visit [vllm.ai/events](https://vllm.ai/events) to join us.
 
 ## About
 
