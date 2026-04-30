@@ -34,6 +34,9 @@ if(VLLM_FLASH_ATTN_SRC_DIR)
           vllm-flash-attn SOURCE_DIR 
           ${VLLM_FLASH_ATTN_SRC_DIR}
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
+		  CMAKE_CACHE_ARGS
+			"-DCMAKE_CXX_FLAGS:STRING=/Zc:preprocessor"
+			"-DCMAKE_CUDA_FLAGS:STRING=-Xcompiler=/Zc:preprocessor"
   )
 else()
   FetchContent_Declare(
@@ -43,6 +46,9 @@ else()
           GIT_PROGRESS TRUE
           # Don't share the vllm-flash-attn build between build types
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
+		  CMAKE_CACHE_ARGS
+			"-DCMAKE_CXX_FLAGS:STRING=/Zc:preprocessor"
+			"-DCMAKE_CUDA_FLAGS:STRING=-Xcompiler=/Zc:preprocessor"
   )
 endif()
 

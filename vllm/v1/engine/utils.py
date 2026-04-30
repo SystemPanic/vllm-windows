@@ -7,7 +7,6 @@ import threading
 import platform
 import socket
 import random
-global_dict_win = {"ports": []}
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -944,18 +943,16 @@ class CoreEngineActorManager:
 
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        # connect_ex returns 0 if the connection was successful (port is in use)
-        return s.connect_ex(('127.0.0.1', port)) == 0
+        try:
+            s.bind(('127.0.0.1', port))
+            return False
+        except OSError:
+            return True
 
 def random_port_exclude(start, end):
     res = random.randint(start, end)
-    port_is_in_use = False
-    while res in global_dict_win["ports"] or (port_is_in_use := is_port_in_use(res)):
-        if port_is_in_use:
-            global_dict_win["ports"].append(res)
-        port_is_in_use = False
+    while port_is_in_use := is_port_in_use(res):
         res = random.randint(start, end)
-    global_dict_win["ports"].append(res)
     return res
 
 def get_engine_zmq_addresses(
@@ -1124,7 +1121,12 @@ def launch_core_engines(
 
     if local_engines_only and dp_rank > 0:
         assert not handshake_local_only
-        local_handshake_address = get_open_zmq_ipc_path()
+        if platform.system() == "Windows":
+            local_handshake_address = get_engine_client_zmq_addr(
+                handshake_local_only, host, random_port_exclude(10000, 65534)
+            )
+        else:
+            local_handshake_address = get_open_zmq_ipc_path()
         client_handshake_address = local_handshake_address
     else:
         local_handshake_address = handshake_address

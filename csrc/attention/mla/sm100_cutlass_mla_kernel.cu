@@ -244,17 +244,15 @@ void sm100_cutlass_mla_decode(
   // Kernel will hang if batch is too large with large num_kv_splits. (for example bs=8, num_kv_splits=8)
   // Maybe per batch split kv will fix this.
   DISPATCH_BOOL(page_size == 128, IsPaged128, [&](auto isPaged128Tag) {
-    constexpr bool IsPaged128 = decltype(isPaged128Tag)::value;
     DISPATCH_BOOL(num_kv_splits <= 1, NotManualSplitKV, [&](auto notManualSplitKVTag) {
-      constexpr bool NotManualSplitKV = decltype(notManualSplitKVTag)::value;
       if (in_dtype == at::ScalarType::Half) {
-        runMla<cutlass::half_t, cutlass::half_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
+        runMla<cutlass::half_t, cutlass::half_t, decltype(isPaged128Tag)::value, IsPersistent<decltype(notManualSplitKVTag)::value>>(
           out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
       } else if (in_dtype == at::ScalarType::BFloat16) {
-        runMla<cutlass::bfloat16_t, cutlass::bfloat16_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
+        runMla<cutlass::bfloat16_t, cutlass::bfloat16_t, decltype(isPaged128Tag)::value, IsPersistent<decltype(notManualSplitKVTag)::value>>(
           out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
       } else if (in_dtype == at::ScalarType::Float8_e4m3fn) {
-        runMla<cutlass::float_e4m3_t, cutlass::bfloat16_t, IsPaged128, IsPersistent<NotManualSplitKV>>(
+        runMla<cutlass::float_e4m3_t, cutlass::bfloat16_t, decltype(isPaged128Tag)::value, IsPersistent<decltype(notManualSplitKVTag)::value>>(
           out, lse, q_nope, q_pe, kv_c_and_k_pe_cache, seq_lens, page_table, workspace, sm_scale, num_kv_splits, stream);
       } else {
         TORCH_CHECK(false, "Unsupported input data type of MLA");

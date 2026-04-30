@@ -377,7 +377,7 @@ __global__ void fusedQKNormRopeKernelNTokenHeads(
     static_assert(elemSizeBytes % 4 == 0,
                   "elemSizeBytes must be a multiple of 4");
     constexpr int vecSize = elemSizeBytes / 4;
-    using vec_T = typename tensorrt_llm::common::packed_as<uint, vecSize>::type;
+    using vec_T = typename tensorrt_llm::common::packed_as<unsigned int, vecSize>::type;
 
     int const cos_sin_bytes =
         warpsPerBlock * rotary_dim * static_cast<int>(sizeof(T_cache));
