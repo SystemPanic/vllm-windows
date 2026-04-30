@@ -34,7 +34,7 @@ vLLM for Windows build & kernels. This repository will be updated when new versi
 
 3. Serve the model with tensor-parallel-size or pipeline-parallel-size, for example `vllm serve YOUR_MODEL --port 8000 --host 127.0.0.1 --max-model-len 16384 --trust-remote-code --max-num-seqs 1 --gpu_memory_utilization 0.8 --pipeline-parallel-size 2`
 
-### Special thanks to NVIDIA for supporting the project with an RTX 5090 and RTX 6000 PRO Blackwell
+### Special thanks to NVIDIA for supporting the project with an RTX 5090
 
 ### Windows instructions:
 
