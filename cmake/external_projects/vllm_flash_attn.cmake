@@ -34,9 +34,6 @@ if(VLLM_FLASH_ATTN_SRC_DIR)
           vllm-flash-attn SOURCE_DIR 
           ${VLLM_FLASH_ATTN_SRC_DIR}
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
-		  CMAKE_CACHE_ARGS
-			"-DCMAKE_CXX_FLAGS:STRING=/Zc:preprocessor"
-			"-DCMAKE_CUDA_FLAGS:STRING=-Xcompiler=/Zc:preprocessor"
   )
 else()
   FetchContent_Declare(
@@ -46,9 +43,6 @@ else()
           GIT_PROGRESS TRUE
           # Don't share the vllm-flash-attn build between build types
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
-		  CMAKE_CACHE_ARGS
-			"-DCMAKE_CXX_FLAGS:STRING=/Zc:preprocessor"
-			"-DCMAKE_CUDA_FLAGS:STRING=-Xcompiler=/Zc:preprocessor"
   )
 endif()
 
@@ -60,8 +54,33 @@ install(CODE "set(OLD_CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")" ALL_CO
 install(CODE "set(CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}/vllm/\")" ALL_COMPONENTS)
 
 # Fetch the vllm-flash-attn library
+# On Windows/MSVC, CCCL (bundled with CUDA 13+) requires the standard
+# conforming preprocessor.  Because FetchContent_MakeAvailable uses
+# add_subdirectory internally, the subproject inherits CMAKE_* variables
+# from this scope.  We therefore append the flags here so they propagate
+# into the flash-attn build.  CMAKE_CACHE_ARGS does NOT work with
+# FetchContent_MakeAvailable — it is silently ignored.
+if (WIN32)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
+endif()
+
 FetchContent_MakeAvailable(vllm-flash-attn)
 message(STATUS "vllm-flash-attn is available at ${vllm-flash-attn_SOURCE_DIR}")
+
+# After MakeAvailable, also force the flag onto the actual targets in case
+# the subproject's CMakeLists.txt overrides CMAKE_CUDA_FLAGS with its own
+# target_compile_options.
+if (WIN32)
+  foreach(_fa_tgt _vllm_fa2_C _vllm_fa3_C)
+    if(TARGET ${_fa_tgt})
+      target_compile_options(${_fa_tgt} PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+      )
+    endif()
+  endforeach()
+endif()
 
 if (WIN32)
   find_package(PythonInterp)
