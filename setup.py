@@ -366,7 +366,8 @@ class cmake_build_ext(build_ext):
         # Make sure we use the nvcc from CUDA_HOME
         if _is_cuda() and CUDA_HOME is not None:
             if IS_WINDOWS:
-                cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME.replace("\\", "/")}/bin/nvcc.exe"]
+                _cuda_home = CUDA_HOME.replace("\\", "/")
+                cmake_args += [f"-DCMAKE_CUDA_COMPILER={_cuda_home}/bin/nvcc.exe"]
             else:
                 cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
         elif _is_hip() and ROCM_HOME is not None:
