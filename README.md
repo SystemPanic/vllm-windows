@@ -30,7 +30,7 @@ vLLM for Windows build & kernels. This repository will be updated when new versi
 
 1. Follow the instructions [here](https://github.com/SystemPanic/nccl-windows/tree/nccl-windows#building-from-source) to compile NCCL for your system.
 
-2. After build, add `set VLLM_NCCL_SO_PATH=YOUR_NCCL_BUILD_INSTALL_DIR`, where YOUR_NCCL_BUILD_INSTALL_DIR is for example C:\nccl-windows\install
+2. After build, add `set VLLM_NCCL_SO_PATH=YOUR_NCCL_BUILD_INSTALL_DIR\bin\nccl.dll`, for example C:\nccl-windows\install\bin\nccl.dll
 
 3. Serve the model with tensor-parallel-size or pipeline-parallel-size, for example `vllm serve YOUR_MODEL --port 8000 --host 127.0.0.1 --max-model-len 16384 --trust-remote-code --max-num-seqs 1 --gpu_memory_utilization 0.8 --pipeline-parallel-size 2`
 
