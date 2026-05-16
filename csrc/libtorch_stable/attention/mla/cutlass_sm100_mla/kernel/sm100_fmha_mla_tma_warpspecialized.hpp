@@ -50,6 +50,10 @@
 #include "gather_tensor.hpp"  // from examples/common
 #include "common/pow_2.hpp"
 
+#ifdef _WIN32
+#define M_LOG2E 1.44269504088896340736
+#endif
+
 namespace cutlass::fmha::kernel {
 
 using namespace cute;

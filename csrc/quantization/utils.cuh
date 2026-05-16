@@ -11,7 +11,11 @@
 
 #ifndef USE_ROCM
   #include <c10/util/Float8_e4m3fn.h>
-  #define MAYBE_HOST_DEVICE C10_HOST_DEVICE
+  #ifdef _WIN32
+    #define MAYBE_HOST_DEVICE C10_DEVICE
+  #else
+    #define MAYBE_HOST_DEVICE C10_HOST_DEVICE
+  #endif
 #else
   #include <ATen/hip/HIPContext.h>
   #include <c10/util/Float8_e4m3fn.h>
@@ -37,17 +41,13 @@ struct quant_type_max<c10::Float8_e4m3fnuz> {
   }
 };
 
-template <typename T>
-MAYBE_HOST_DEVICE static constexpr T quant_type_max_v =
-    quant_type_max<T>::val();
-
 template <typename T,
           typename = std::enable_if_t<std::is_same_v<T, c10::Float8_e4m3fn> ||
                                       std::is_same_v<T, c10::Float8_e4m3fnuz> ||
                                       std::is_same_v<T, int8_t>>>
 struct min_scaling_factor {
   C10_DEVICE C10_ALWAYS_INLINE static float val() {
-    return 1.0f / (quant_type_max_v<T> * 512.0f);
+    return 1.0f / (quant_type_max<T>::val() * 512.0f);
   }
 };
 

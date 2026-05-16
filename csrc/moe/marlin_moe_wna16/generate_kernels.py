@@ -164,10 +164,16 @@ QUANT_CONFIGS = [
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
-        subprocess.call(["rm", "-f", filename])
+        if sys.platform == "win32":
+            subprocess.call(["cmd.exe", "/C", "del", "/F", filename])
+        else:
+            subprocess.call(["rm", "-f", filename])
 
     filename = os.path.dirname(__file__) + "/kernel_selector.h"
-    subprocess.call(["rm", "-f", filename])
+    if sys.platform == "win32":
+        subprocess.call(["cmd.exe", "/C", "del", "/F", filename])
+    else:
+        subprocess.call(["rm", "-f", filename])
 
 
 def generate_new_kernels():
@@ -261,11 +267,6 @@ def generate_new_kernels():
                 ]
                 conditions = " && ".join(conditions)
 
-                if kernel_selector_str == FILE_HEAD_COMMENT:
-                    kernel_selector_str += f"if ({conditions})\n  kernel = "
-                else:
-                    kernel_selector_str += f"else if ({conditions})\n  kernel = "
-
                 kernel_template2 = (
                     "Marlin<{{a_type_id}}, {{b_type_id}}, {{c_type_id}}, "
                     "{{s_type_id}}, {{threads}}, {{thread_m_blocks}}, "
@@ -275,7 +276,8 @@ def generate_new_kernels():
                 )
 
                 kernel_selector_str += (
-                    jinja2.Template(kernel_template2).render(
+                    f"if ({conditions})\n  return "
+                    + jinja2.Template(kernel_template2).render(
                         a_type_id=f"vllm::{a_type}.id()",
                         b_type_id=f"vllm::{b_type}.id()",
                         c_type_id=f"vllm::{c_type}.id()",
@@ -301,9 +303,9 @@ def generate_new_kernels():
 
     if not SUPPORT_FP8 and kernel_selector_str != FILE_HEAD_COMMENT:
         kernel_selector_str += (
-            "else if (a_type == vllm::kFE4M3fn)\n"
+            "if (a_type == vllm::kFE4M3fn)\n"
             "  TORCH_CHECK(false, "
-            '"marlin kernel with fp8 activation is not built.");'
+            '"marlin kernel with fp8 activation is not built.");\n'
         )
 
     with open(os.path.join(os.path.dirname(__file__), "kernel_selector.h"), "w") as f:

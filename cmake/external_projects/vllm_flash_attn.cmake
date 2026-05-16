@@ -54,8 +54,36 @@ install(CODE "set(OLD_CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}\")" ALL_CO
 install(CODE "set(CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}/vllm/\")" ALL_COMPONENTS)
 
 # Fetch the vllm-flash-attn library
+# On Windows/MSVC, CCCL (bundled with CUDA 13+) requires the standard
+# conforming preprocessor.  Because FetchContent_MakeAvailable uses
+# add_subdirectory internally, the subproject inherits CMAKE_* variables
+# from this scope.  We therefore append the flags here so they propagate
+# into the flash-attn build.  CMAKE_CACHE_ARGS does NOT work with
+# FetchContent_MakeAvailable — it is silently ignored.
+if (WIN32)
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
+endif()
+
 FetchContent_MakeAvailable(vllm-flash-attn)
 message(STATUS "vllm-flash-attn is available at ${vllm-flash-attn_SOURCE_DIR}")
+
+# After MakeAvailable, also force the flag onto the actual targets in case
+# the subproject's CMakeLists.txt overrides CMAKE_CUDA_FLAGS with its own
+# target_compile_options.
+if (WIN32)
+  foreach(_fa_tgt _vllm_fa2_C _vllm_fa3_C)
+    if(TARGET ${_fa_tgt})
+      target_compile_options(${_fa_tgt} PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+      )
+    endif()
+  endforeach()
+  find_package(PythonInterp)
+  find_package(Python)
+  execute_process(COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fix_cutlass_msvc.py ${vllm-flash-attn_SOURCE_DIR}/csrc/cutlass)
+endif()
 
 # Restore the install prefix after FA's install rules
 install(CODE "set(CMAKE_INSTALL_PREFIX \"\${OLD_CMAKE_INSTALL_PREFIX}\")" ALL_COMPONENTS)

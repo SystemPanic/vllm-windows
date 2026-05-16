@@ -10,10 +10,30 @@ extern "C" {
   #include <mwaitxintrin.h>
 #endif
 
-#if defined(CLOCK_MONOTONIC_RAW)
-  #define TIMEOUT_CLOCK CLOCK_MONOTONIC_RAW
-#else
+#if defined(_WIN32)
+  #include <windows.h>
+
+  // Provide clock_gettime replacement for Windows
+  #define CLOCK_MONOTONIC 0
   #define TIMEOUT_CLOCK CLOCK_MONOTONIC
+
+  static int clock_gettime(int /*clk_id*/, struct timespec* tp) {
+    static LARGE_INTEGER freq = {0};
+    if (freq.QuadPart == 0) {
+      QueryPerformanceFrequency(&freq);
+    }
+    LARGE_INTEGER count;
+    QueryPerformanceCounter(&count);
+    tp->tv_sec = (long)(count.QuadPart / freq.QuadPart);
+    tp->tv_nsec = (long)((count.QuadPart % freq.QuadPart) * 1000000000LL / freq.QuadPart);
+    return 0;
+  }
+#else
+  #if defined(CLOCK_MONOTONIC_RAW)
+    #define TIMEOUT_CLOCK CLOCK_MONOTONIC_RAW
+  #else
+    #define TIMEOUT_CLOCK CLOCK_MONOTONIC
+  #endif
 #endif
 
 #define CPU_SUPPORT_NONE 0

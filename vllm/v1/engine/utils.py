@@ -4,6 +4,9 @@
 import contextlib
 import os
 import threading
+import platform
+import socket
+import random
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -952,6 +955,20 @@ class CoreEngineActorManager:
             ray.util.remove_placement_group(pg)
 
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('127.0.0.1', port))
+            return False
+        except OSError:
+            return True
+
+def random_port_exclude(start, end):
+    res = random.randint(start, end)
+    while port_is_in_use := is_port_in_use(res):
+        res = random.randint(start, end)
+    return res
+
 def get_engine_zmq_addresses(
     vllm_config: VllmConfig,
     num_api_servers: int = 1,
@@ -978,16 +995,33 @@ def get_engine_zmq_addresses(
     if parallel_config.enable_elastic_ep:
         client_local_only = False
 
-    return EngineZmqAddresses(
-        inputs=[
-            get_engine_client_zmq_addr(client_local_only, host)
-            for _ in range(num_api_servers)
-        ],
-        outputs=[
-            get_engine_client_zmq_addr(client_local_only, host)
-            for _ in range(num_api_servers)
-        ],
-    )
+    # Set up input and output addresses.
+    if platform.system() == "Windows":
+        #random unused ports for zmq sockets
+        inputs = []
+        outputs = []
+        for num_api_index in range(num_api_servers):
+            input_address_port = random_port_exclude(10000, 65534)
+            inputs.append(get_engine_client_zmq_addr(client_local_only, host, input_address_port))
+            output_address_port = random_port_exclude(10000, 65534)
+            outputs.append(get_engine_client_zmq_addr(client_local_only, host, output_address_port))
+
+        addresses = EngineZmqAddresses(
+            inputs=inputs,
+            outputs=outputs,
+        )
+    else:
+        addresses = EngineZmqAddresses(
+            inputs=[
+                get_engine_client_zmq_addr(client_local_only, host)
+                for _ in range(num_api_servers)
+            ],
+            outputs=[
+                get_engine_client_zmq_addr(client_local_only, host)
+                for _ in range(num_api_servers)
+            ],
+        )
+    return addresses
 
 
 @contextlib.contextmanager
@@ -1101,7 +1135,12 @@ def launch_core_engines(
 
     if local_engines_only and dp_rank > 0:
         assert not handshake_local_only
-        local_handshake_address = get_open_zmq_ipc_path()
+        if platform.system() == "Windows":
+            local_handshake_address = get_engine_client_zmq_addr(
+                handshake_local_only, host, random_port_exclude(10000, 65534)
+            )
+        else:
+            local_handshake_address = get_open_zmq_ipc_path()
         client_handshake_address = local_handshake_address
     else:
         local_handshake_address = handshake_address
@@ -1165,7 +1204,7 @@ def wait_for_engine_startup(
         and not parallel_config.data_parallel_external_lb
     )
 
-    if proc_manager is not None:
+    if proc_manager is not None and platform.system() != "Windows":
         for sentinel in proc_manager.sentinels():
             poller.register(sentinel, zmq.POLLIN)
     if coord_process is not None:

@@ -164,10 +164,16 @@ QUANT_CONFIGS = [
 
 def remove_old_kernels():
     for filename in glob.glob(os.path.dirname(__file__) + "/*kernel_*.cu"):
-        subprocess.call(["rm", "-f", filename])
+        if sys.platform == "win32":
+            subprocess.call(["cmd.exe", "/C", "del", "/F", filename])
+        else:
+            subprocess.call(["rm", "-f", filename])
 
     filename = os.path.dirname(__file__) + "/kernel_selector.h"
-    subprocess.call(["rm", "-f", filename])
+    if sys.platform == "win32":
+        subprocess.call(["cmd.exe", "/C", "del", "/F", filename])
+    else:
+        subprocess.call(["rm", "-f", filename])
 
 
 def generate_new_kernels():
@@ -228,6 +234,15 @@ def generate_new_kernels():
                     config_sm75["stages"] = 2
                     sm_75_result_dict[(a_type, b_type, c_type)].append(config_sm75)
 
+    # Generate kernel_selector.h using independent `if (...) return` statements
+    # instead of an `if/else if` chain. MSVC counts else-if nesting depth
+    # across all levels (error C1061 at ~128), so we must avoid else-if
+    # entirely. Independent if-return has zero nesting.
+    #
+    # This changes the contract: kernel_selector.h is now #include'd inside a
+    # function that returns the kernel pointer directly, rather than assigning
+    # to a local variable. marlin.cu must be patched accordingly — see below.
+
     kernel_selector_str = FILE_HEAD_COMMENT
 
     for result_dict_tmp in [result_dict, sm_75_result_dict]:
@@ -262,11 +277,6 @@ def generate_new_kernels():
                 ]
                 conditions = " && ".join(conditions)
 
-                if kernel_selector_str == FILE_HEAD_COMMENT:
-                    kernel_selector_str += f"if ({conditions})\n  kernel = "
-                else:
-                    kernel_selector_str += f"else if ({conditions})\n  kernel = "
-
                 kernel_template2 = (
                     "Marlin<{{a_type_id}}, {{b_type_id}}, {{c_type_id}}, "
                     "{{s_type_id}}, {{threads}}, {{thread_m_blocks}}, "
@@ -275,15 +285,17 @@ def generate_new_kernels():
                     "{{is_zp_float}}>;"
                 )
 
+                kernel_value = jinja2.Template(kernel_template2).render(
+                    a_type_id=f"vllm::{a_type}.id()",
+                    b_type_id=f"vllm::{b_type}.id()",
+                    c_type_id=f"vllm::{c_type}.id()",
+                    s_type_id=f"vllm::{s_type}.id()",
+                    **config,
+                )
+
                 kernel_selector_str += (
-                    jinja2.Template(kernel_template2).render(
-                        a_type_id=f"vllm::{a_type}.id()",
-                        b_type_id=f"vllm::{b_type}.id()",
-                        c_type_id=f"vllm::{c_type}.id()",
-                        s_type_id=f"vllm::{s_type}.id()",
-                        **config,
-                    )
-                    + "\n"
+                    f"if ({conditions})\n"
+                    f"  return {kernel_value}\n"
                 )
 
             file_content = FILE_HEAD + "\n\n"
@@ -302,9 +314,9 @@ def generate_new_kernels():
 
     if not SUPPORT_FP8 and kernel_selector_str != FILE_HEAD_COMMENT:
         kernel_selector_str += (
-            "else if (a_type == vllm::kFE4M3fn)\n"
+            "if (a_type == vllm::kFE4M3fn)\n"
             "  TORCH_CHECK(false, "
-            '"marlin kernel with fp8 activation is not built.");'
+            '"marlin kernel with fp8 activation is not built.");\n'
         )
 
     with open(os.path.join(os.path.dirname(__file__), "kernel_selector.h"), "w") as f:

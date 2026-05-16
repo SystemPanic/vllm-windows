@@ -14,6 +14,107 @@ Easy, fast, and cheap LLM serving for everyone
 | <a href="https://docs.vllm.ai"><b>Documentation</b></a> | <a href="https://blog.vllm.ai/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2309.06180"><b>Paper</b></a> | <a href="https://x.com/vllm_project"><b>Twitter/X</b></a> | <a href="https://discuss.vllm.ai"><b>User Forum</b></a> | <a href="https://slack.vllm.ai"><b>Developer Slack</b></a> |
 </p>
 
+## vLLM for Windows
+
+vLLM for Windows build & kernels. This repository will be updated when new versions of vLLM are released.
+
+**Don't open a new Issue to request a specific commit build. Wait for a new stable release.**
+
+**Don't open Issues for general vLLM questions or non Windows related problems. Only Windows specific issues.** Any Issue opened that is not Windows specific will be closed automatically.
+
+**Don't request a wheel for your specific environment.** If your environment does not match the released wheel, build your own wheel from source by following the [instructions below](https://github.com/SystemPanic/vllm-windows?tab=readme-ov-file#building-from-source).
+
+#### NEW FEATURE 🔥 CUDA 13 + Blackwell GPU support on Windows
+
+#### NEW FEATURE 🔥 NCCL + Tensor / Pipeline parallelism for multi-gpu inference support on Windows
+
+1. Follow the instructions [here](https://github.com/SystemPanic/nccl-windows/tree/nccl-windows#building-from-source) to compile NCCL for your system.
+
+2. After build, add `set VLLM_NCCL_SO_PATH=YOUR_NCCL_BUILD_INSTALL_DIR\bin\nccl.dll`, for example C:\nccl-windows\install\bin\nccl.dll
+
+3. Serve the model with tensor-parallel-size or pipeline-parallel-size, for example `vllm serve YOUR_MODEL --port 8000 --host 127.0.0.1 --max-model-len 16384 --trust-remote-code --max-num-seqs 1 --gpu_memory_utilization 0.8 --pipeline-parallel-size 2`
+
+### Special thanks to NVIDIA for supporting the project with an RTX 5090
+
+### Windows instructions:
+
+#### Installing an existing release wheel:
+
+1. Ensure that you have the correct Python, Torch and CUDA version of the wheel. The Python, Torch and CUDA version of the wheel is specified in the release version.
+2. Download the wheel from the release version of your preference (latest wheel [here](https://github.com/SystemPanic/vllm-windows/releases/latest)).
+3. Install it with ```pip install DOWNLOADED_WHEEL_PATH```
+
+#### Building from source:
+
+A Visual Studio 2019 or newer is required to launch the compiler x64 environment. The installation path is referred in the instructions as VISUAL_STUDIO_INSTALL_PATH.
+
+CUDA path will be found automatically if you have the bin folder in your PATH, or have the CUDA installation path settled on well-known environment vars like CUDA_ROOT, CUDA_HOME or CUDA_PATH.
+
+If none of these are present, make sure to set the environment variable before starting the build:
+set CUDA_ROOT=CUDA_INSTALLATION_PATH
+
+1. Open a Command Line (cmd.exe)
+2. **Clone the vLLM for Windows repository from vllm-for-windows branch (NOT MAIN): ```cd C:\ & git clone --single-branch --branch vllm-for-windows https://github.com/SystemPanic/vllm-windows.git```**
+3. Execute (in cmd) ```VISUAL_STUDIO_INSTALL_PATH\VC\Auxiliary\Build\vcvarsall.bat x64```
+4. Change the working directory to the cloned repository path, for example: ```cd C:\vllm-windows```
+5. Set the following environment variables:
+
+```
+set DISTUTILS_USE_SDK=1
+set VLLM_TARGET_DEVICE=cuda
+#(replace 10 with your desired cpu threads to use in parallel to speed up compilation)
+set MAX_JOBS=10
+
+#Optional variables:
+
+#To include cuDSS (only if you have cuDSS installed)
+set USE_CUDSS=1
+set CUDSS_LIBRARY_PATH=PATH_TO_CUDSS_INSTALL_DIR\lib\12
+set CUDSS_INCLUDE_PATH=PATH_TO_CUDSS_INSTALL_DIR\include
+
+#To include cuSPARSELt (only if you have cuSPARSELt installed)
+set USE_CUSPARSELT=1
+set CUSPARSELT_INCLUDE_PATH=PATH_TO_CUSPARSELT_INSTALL_DIR\include
+set CUSPARSELT_LIBRARY_PATH=PATH_TO_CUSPARSELT_INSTALL_DIR\lib
+
+#To include cuDNN:
+set USE_CUDNN=1
+set CUDNN_LIBRARY_PATH=PATH_TO_CUDNN_INSTALL_DIR\lib\CUDNN_CUDA_VERSION\x64
+set CUDNN_INCLUDE_PATH=PATH_TO_CUDNN_INSTALL_DIR\include\CUDNN_CUDA_VERSION
+
+#Flash Attention v3 build has been disabled inside WSL2 and Windows due to compiler being killed on WSL2, and extremely long compiling times on Windows. Hopper is not available on Windows, so FA3 has no sense anyway. 
+#Build can be forcefully enabled using the following environment var:
+set VLLM_FORCE_FA3_WINDOWS_BUILD=1
+
+```
+
+6. Enable long paths on Windows and Git if you didn't enabled it:
+
+````
+reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f
+git config --global core.longpaths true
+git config --system core.longpaths true
+````
+
+##### IMPORTANT FOR CUDA 13.0 TO CUDA 13.2 BUILDS:
+CUDA 13.0 to CUDA 13.2 cuda.h currently has 128 byte alignment. MSVC does not support yet passing over-aligned types like alignas(128) by value as function parameters. CUDA 13.3 will revert back to 64 byte alignment, but if you have installed a CUDA 13 version before 13.3, you need to patch it.
+
+To patch, open an elevated command line (execute cmd.exe as Administrator), and run `python C:\vllm-windows\fix_cuda_13_align.py` once time before building the project.
+
+7. Build & install:
+```
+#Install torch 2.11 CUDA 13 (change cu130 with your installed CUDA version)
+pip install torch==2.11+cu130 torchaudio==2.11+cu130 torchvision==0.26.0+cu130 --index-url https://download.pytorch.org/whl/cu130
+
+pip install -r requirements/build/cuda.txt
+pip install -r requirements/cuda.txt
+pip install -r requirements/windows.txt
+pip install . --no-build-isolation -vvv
+
+```
+
+---
+
 🔥 We have built a vLLM website to help you get started with vLLM. Please visit [vllm.ai](https://vllm.ai) to learn more.
 For events, please visit [vllm.ai/events](https://vllm.ai/events) to join us.
 

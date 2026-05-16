@@ -6,6 +6,7 @@ import importlib.util
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -39,12 +40,15 @@ envs = load_module_from_path("envs", os.path.join(ROOT_DIR, "vllm", "envs.py"))
 
 VLLM_TARGET_DEVICE = envs.VLLM_TARGET_DEVICE
 
+IS_WINDOWS = platform.system() == "Windows"
+
 if sys.platform.startswith("darwin") and VLLM_TARGET_DEVICE != "cpu":
     logger.warning("VLLM_TARGET_DEVICE automatically set to `cpu` due to macOS")
     VLLM_TARGET_DEVICE = "cpu"
-elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")):
+elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")
+          or IS_WINDOWS):
     logger.warning(
-        "vLLM only supports Linux platform (including WSL) and MacOS."
+        "vLLM only supports Linux platform (including WSL), Windows and MacOS."
         "Building on %s, "
         "so vLLM may not be able to run correctly",
         sys.platform,
@@ -63,6 +67,13 @@ elif sys.platform.startswith("linux") and os.getenv("VLLM_TARGET_DEVICE") is Non
     else:
         VLLM_TARGET_DEVICE = "cpu"
 
+IS_WSL = ("microsoft-standard-WSL2" in platform.uname().release
+          or "-Microsoft" in platform.uname().release)
+
+if ((IS_WINDOWS or IS_WSL)
+        and os.environ.get("VLLM_FORCE_FA3_WINDOWS_BUILD", "0") != "1"):
+    # FA3 CAUSES COMPILER CRASH ON WSL2 AND WINDOWS, DISABLE IT
+    os.environ['VLLM_DISABLE_FA3_BUILD'] = "1"
 
 def is_sccache_available() -> bool:
     return which("sccache") is not None and not bool(
@@ -219,7 +230,8 @@ class cmake_build_ext(build_ext):
         if verbose:
             cmake_args += ["-DCMAKE_VERBOSE_MAKEFILE=ON"]
 
-        if is_sccache_available():
+        # Prefer ccache over sccache on Windows, is more stable and cache can be cleared easily after use
+        if is_sccache_available() and (not IS_WINDOWS or not is_ccache_available()):
             cmake_args += [
                 "-DCMAKE_C_COMPILER_LAUNCHER=sccache",
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
@@ -236,11 +248,24 @@ class cmake_build_ext(build_ext):
 
         # Pass the python executable to cmake so it can find an exact
         # match.
-        cmake_args += ["-DVLLM_PYTHON_EXECUTABLE={}".format(sys.executable)]
+        # Windows: convert backslashes for CMake
+        python_exec_path = sys.executable
+        if IS_WINDOWS:
+            python_exec_path = python_exec_path.replace('\\', '/')
+
+        cmake_args += ['-DVLLM_PYTHON_EXECUTABLE={}'.format(python_exec_path)]
 
         # Pass the python path to cmake so it can reuse the build dependencies
         # on subsequent calls to python.
-        cmake_args += ["-DVLLM_PYTHON_PATH={}".format(":".join(sys.path))]
+        py_path = ":".join(p.replace("\\", "/") for p in sys.path) if IS_WINDOWS else ":".join(sys.path)
+        cmake_args += ["-DVLLM_PYTHON_PATH={}".format(py_path)]
+
+        if VLLM_TARGET_DEVICE == 'cuda':
+            if IS_WINDOWS:
+                cmake_args += [
+                    f'-Dnvtx3_dir={CUDA_HOME}\\include',
+                    f'-DCUDA_cublas_LIBRARY={CUDA_HOME}\\lib\\x64\\cublas.lib'
+                ]
 
         # Override the base directory for FetchContent downloads to $ROOT/.deps
         # This allows sharing dependencies between profiles,
@@ -269,7 +294,11 @@ class cmake_build_ext(build_ext):
             build_tool = []
         # Make sure we use the nvcc from CUDA_HOME
         if _is_cuda() and CUDA_HOME is not None:
-            cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
+            if IS_WINDOWS:
+                _cuda_home = CUDA_HOME.replace("\\", "/")
+                cmake_args += [f"-DCMAKE_CUDA_COMPILER={_cuda_home}/bin/nvcc.exe"]
+            else:
+                cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
         elif _is_hip() and ROCM_HOME is not None:
             cmake_args += [f"-DROCM_PATH={ROCM_HOME}"]
 
@@ -963,7 +992,8 @@ def get_requirements() -> list[str]:
         requirements = _read_requirements("common.txt")
     elif _is_cuda():
         requirements = _read_requirements("cuda.txt")
-        cuda_major, cuda_minor = torch.version.cuda.split(".")
+        cuda_ver = get_nvcc_cuda_version()
+        cuda_major, cuda_minor = str(cuda_ver).split(".")[:2]
         modified_requirements = []
         for req in requirements:
             if "vllm-flash-attn" in req and cuda_major != "12":
@@ -985,6 +1015,10 @@ def get_requirements() -> list[str]:
         requirements = _read_requirements("xpu.txt")
     else:
         raise ValueError("Unsupported platform, please use CUDA, ROCm, or CPU.")
+
+    if IS_WINDOWS:
+        requirements.extend(_read_requirements("windows.txt"))
+
     return requirements
 
 
@@ -1004,8 +1038,9 @@ if _is_hip():
 
 if _is_cuda():
     ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa2_C"))
-    if envs.VLLM_USE_PRECOMPILED or (
-        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")
+    if ((envs.VLLM_USE_PRECOMPILED or (
+        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")))
+        and os.environ.get("VLLM_DISABLE_FA3_BUILD", "0") != "1"
     ):
         # FA3 requires CUDA 12.3 or later
         ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa3_C"))

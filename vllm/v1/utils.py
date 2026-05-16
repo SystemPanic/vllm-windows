@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import multiprocessing
 import threading
+import platform
 import time
 import weakref
 from collections.abc import Callable, Sequence
@@ -22,7 +23,16 @@ from typing import (
 )
 
 import torch
-import uvloop
+import os
+if platform.system() == "Windows":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 from torch.autograd.profiler import record_function
 
 import vllm.envs as envs
@@ -152,6 +162,11 @@ def get_engine_client_zmq_addr(local_only: bool, host: str, port: int = 0) -> st
     Otherwise, the provided host and port will be used to construct a TCP
     address (port == 0 means assign an available port)."""
 
+    if platform.system() == "Windows":
+        host = host if not local_only and host is not None and len(host) > 0 else "127.0.0.1"
+        port = port if port >= 1024 else 45975
+        return f"tcp://{host}:{port}"
+
     return (
         get_open_zmq_ipc_path()
         if local_only
@@ -247,7 +262,7 @@ def run_api_server_worker_proc(
     set_process_title("APIServer", str(server_index))
     decorate_logs()
 
-    uvloop.run(
+    uvloop_impl.run(
         run_server_worker(listen_address, sock, args, client_config, **uvicorn_kwargs)
     )
 

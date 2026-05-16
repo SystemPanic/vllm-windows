@@ -16,7 +16,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import cached_property, partial
-from multiprocessing.connection import Connection
+from multiprocessing.connection import Connection, _ConnectionBase
 from multiprocessing.process import BaseProcess
 from multiprocessing.synchronize import Lock as LockType
 from threading import Thread
@@ -730,7 +730,7 @@ class WorkerProc:
         while pipes:
             ready = multiprocessing.connection.wait(pipes.keys())
             for pipe in ready:
-                assert isinstance(pipe, Connection)
+                assert isinstance(pipe, _ConnectionBase)
                 try:
                     # Wait until the WorkerProc is ready.
                     unready_proc_handle = pipes.pop(pipe)
