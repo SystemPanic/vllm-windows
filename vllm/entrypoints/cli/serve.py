@@ -65,7 +65,7 @@ class ServeSubcommand(CLISubcommand):
         if getattr(args, "grpc", False):
             from vllm.entrypoints.grpc_server import serve_grpc
 
-            uvloop.run(serve_grpc(args))
+            uvloop_impl.run(serve_grpc(args))
             return
 
         if args.headless:
