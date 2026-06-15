@@ -14,10 +14,17 @@ if(QUTLASS_SRC_DIR)
     BUILD_COMMAND ""
   )
 else()
+  if(WIN32)
+    set(QUTLASS_GIT "https://github.com/SystemPanic/qutlass.git")
+    set(QUTLASS_REV "2d26c3357de7935d839cd9b88638dac3da2a5d9b")
+  else()
+    set(QUTLASS_GIT "https://github.com/IST-DASLab/qutlass.git")
+    set(QUTLASS_REV "830d2c4537c7396e14a02a46fbddd18b5d107c65")
+  endif()
   FetchContent_Declare(
     qutlass
-    GIT_REPOSITORY https://github.com/IST-DASLab/qutlass.git
-    GIT_TAG 830d2c4537c7396e14a02a46fbddd18b5d107c65
+    GIT_REPOSITORY ${QUTLASS_GIT}
+    GIT_TAG ${QUTLASS_REV}
     GIT_PROGRESS TRUE
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""

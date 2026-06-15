@@ -1,7 +1,10 @@
 # Install OpenAI triton_kernels from https://github.com/triton-lang/triton/tree/main/python/triton_kernels
 
-set(DEFAULT_TRITON_KERNELS_TAG "v3.5.1")
-
+if(WIN32)
+  set(DEFAULT_TRITON_KERNELS_TAG "v3.6.0-windows.post26")
+else()
+  set(DEFAULT_TRITON_KERNELS_TAG "v3.5.1")
+endif()
 # Set TRITON_KERNELS_SRC_DIR for use with local development with vLLM. We expect TRITON_KERNELS_SRC_DIR to
 # be directly set to the triton_kernels python directory.
 if (DEFINED ENV{TRITON_KERNELS_SRC_DIR})
@@ -12,12 +15,16 @@ if (DEFINED ENV{TRITON_KERNELS_SRC_DIR})
   )
 
 else()
-  set(TRITON_GIT "https://github.com/triton-lang/triton.git")
+  if(WIN32)
+    set(TRITON_GIT "https://github.com/triton-lang/triton-windows.git")
+  else()
+    set(TRITON_GIT "https://github.com/triton-lang/triton.git")
+  endif()
   message (STATUS "[triton_kernels] Fetch from ${TRITON_GIT}:${DEFAULT_TRITON_KERNELS_TAG}")
   FetchContent_Declare(
           triton_kernels
           # TODO (varun) : Fetch just the triton_kernels directory from Triton
-          GIT_REPOSITORY https://github.com/triton-lang/triton.git
+          GIT_REPOSITORY ${TRITON_GIT}
           GIT_TAG ${DEFAULT_TRITON_KERNELS_TAG}
           GIT_PROGRESS TRUE
           SOURCE_SUBDIR python/triton_kernels/triton_kernels

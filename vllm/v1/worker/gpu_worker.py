@@ -5,6 +5,7 @@
 import gc
 import os
 from collections.abc import Callable
+import platform
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from datetime import timedelta
 from types import NoneType
@@ -1176,6 +1177,7 @@ def init_worker_distributed_environment(
         moe_backend=getattr(vllm_config.kernel_config, "moe_backend", None),
     )
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
+    backend = "gloo" if platform.system() == "Windows" else backend
 
     init_method = distributed_init_method or "env://"
 

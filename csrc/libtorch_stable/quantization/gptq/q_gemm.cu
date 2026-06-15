@@ -10,6 +10,9 @@ https://github.com/qwopqwop200/GPTQ-for-LLaMa
 #include <torch/csrc/stable/ops.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#ifdef _WIN32
+  #include <cublas_api.h>
+#endif
 
 #include "compat.cuh"
 #include "matrix_view.cuh"

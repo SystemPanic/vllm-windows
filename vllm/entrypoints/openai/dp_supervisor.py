@@ -10,6 +10,7 @@ import contextlib
 import copy
 import multiprocessing
 import os
+import platform
 import signal
 import time
 from functools import partial
@@ -19,7 +20,16 @@ from multiprocessing.process import BaseProcess
 import aiohttp
 import psutil
 import uvicorn
-import uvloop
+
+if platform.system() == "Windows":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
+
 from fastapi import FastAPI, Response
 
 from vllm.logger import init_logger
@@ -244,7 +254,7 @@ def _run_vllm_dp_server(
     update_environment_variables(env_updates)
     set_process_title(name)
     decorate_logs(name)
-    uvloop.run(run_server(child_args))
+    uvloop_impl.run(run_server(child_args))
 
 
 class DPSupervisor:
@@ -504,4 +514,4 @@ class DPSupervisor:
 
 
 def run_dp_supervisor(args: argparse.Namespace) -> None:
-    uvloop.run(DPSupervisor(args).run())
+    uvloop_impl.run(DPSupervisor(args).run())

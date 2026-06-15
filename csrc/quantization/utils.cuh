@@ -38,10 +38,6 @@ struct quant_type_max<torch::headeronly::Float8_e4m3fnuz> {
   }
 };
 
-template <typename T>
-MAYBE_HOST_DEVICE static constexpr T quant_type_max_v =
-    quant_type_max<T>::val();
-
 template <typename T,
           typename = std::enable_if_t<
               std::is_same_v<T, torch::headeronly::Float8_e4m3fn> ||
@@ -49,7 +45,7 @@ template <typename T,
               std::is_same_v<T, int8_t>>>
 struct min_scaling_factor {
   C10_DEVICE C10_ALWAYS_INLINE static float val() {
-    return 1.0f / (quant_type_max_v<T> * 512.0f);
+    return 1.0f / (quant_type_max<T>::val() * 512.0f);
   }
 };
 

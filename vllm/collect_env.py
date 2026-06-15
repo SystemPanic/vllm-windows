@@ -301,7 +301,7 @@ def get_xpu_runtime_version():
 
 
 def get_pkg_version(run_lambda, pkg):
-    assert get_platform() == "linux"
+    assert get_platform() == "linux" or get_platform() == "win32"
 
     if pkg == "vllm_xpu_kernels":
         rc, out, _ = run_lambda("pip show vllm-xpu-kernels")
