@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-native-tls-vendored = ["dep:native-tls-vendored"]
+native-tls-vendored = ["dep:native-tls-vendored", "dep:openssl-vendored"]
 
 [dependencies]
 anyhow.workspace = true
@@ -19,6 +19,7 @@ educe.workspace = true
 itertools.workspace = true
 mimalloc.workspace = true
 native-tls-vendored = { workspace = true, optional = true }
+openssl-vendored = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true

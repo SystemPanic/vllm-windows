@@ -130,16 +130,24 @@ fn peer_identity(engine_id: impl Into<EngineId>) -> Result<PeerIdentity> {
 /// Wait for an endpoint to accept connections before attempting the ZMQ connect.
 async fn wait_for_endpoint(endpoint: &str, connect_timeout: Duration) -> Result<()> {
     if let Some(socket_path) = endpoint.strip_prefix("ipc://") {
-        timeout(connect_timeout, async {
-            while tokio::net::UnixStream::connect(socket_path).await.is_err() {
-                sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .map_err(|_| Error::HandshakeTimeout {
-            stage: "mock engine IPC endpoint",
-            timeout: connect_timeout,
-        })
+        #[cfg(unix)]
+        {
+            timeout(connect_timeout, async {
+                while tokio::net::UnixStream::connect(socket_path).await.is_err() {
+                    sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .map_err(|_| Error::HandshakeTimeout {
+                stage: "mock engine IPC endpoint",
+                timeout: connect_timeout,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (socket_path, connect_timeout);
+            Ok(())
+        }
     } else if let Some(address) = endpoint.strip_prefix("tcp://") {
         timeout(connect_timeout, async {
             while tokio::net::TcpStream::connect(address).await.is_err() {

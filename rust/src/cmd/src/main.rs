@@ -64,16 +64,24 @@ fn shutdown_signal() -> CancellationToken {
             tokio::signal::ctrl_c().await.expect("failed to install Ctrl-C signal handler");
         };
 
-        let sigterm = async {
+        #[cfg(unix)]
+        let terminate = async {
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .expect("failed to install SIGTERM signal handler")
+                .recv()
+                .await;
+        };
+        #[cfg(windows)]
+        let terminate = async {
+            tokio::signal::windows::ctrl_break()
+                .expect("failed to install Ctrl-Break signal handler")
                 .recv()
                 .await;
         };
 
         tokio::select! {
             _ = ctrl_c => info!("received shutdown signal (Ctrl-C), shutting down..."),
-            _ = sigterm => info!("received shutdown signal (SIGTERM), shutting down..."),
+            _ = terminate => info!("received termination signal, shutting down..."),
         }
 
         shutdown.cancel();

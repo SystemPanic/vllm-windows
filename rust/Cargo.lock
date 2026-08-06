@@ -5566,6 +5566,7 @@ dependencies = [
  "itertools 0.14.0",
  "mimalloc",
  "native-tls",
+ "openssl",
  "serde",
  "serde_json",
  "serde_with",

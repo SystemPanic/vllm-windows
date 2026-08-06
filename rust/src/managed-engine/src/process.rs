@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+#[cfg(unix)]
 use std::io;
 use std::net::TcpListener;
 use std::process::{Command as StdCommand, ExitStatus, Stdio};
@@ -140,7 +141,7 @@ impl ManagedEngineHandle {
         info!(
             pid,
             ?shutdown_timeout,
-            "shutting down managed engine with SIGTERM"
+            "shutting down managed engine process group"
         );
         process_group::terminate(pid)?;
 
@@ -152,7 +153,7 @@ impl ManagedEngineHandle {
         // If it doesn't exit within the timeout, force kill it.
         info!(
             pid,
-            "managed engine did not exit within timeout, sending SIGKILL"
+            "managed engine did not exit within timeout, forcing termination"
         );
         process_group::kill(pid)?;
 
@@ -163,6 +164,7 @@ impl ManagedEngineHandle {
 
 /// Process group helper functions for managing the Python subprocess and its
 /// potential children in a platform-aware way.
+#[cfg(unix)]
 mod process_group {
     use super::*;
 
@@ -201,6 +203,45 @@ mod process_group {
             return Ok(());
         }
         Err(error).context("failed to signal managed engine process group")
+    }
+}
+
+#[cfg(windows)]
+mod process_group {
+    use super::*;
+
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    pub fn configure(command: &mut Command) {
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
+
+    pub fn terminate(pid: u32) -> Result<()> {
+        taskkill(pid, false)
+    }
+
+    pub fn kill(pid: u32) -> Result<()> {
+        taskkill(pid, true)
+    }
+
+    fn taskkill(pid: u32, force: bool) -> Result<()> {
+        let mut command = StdCommand::new("taskkill.exe");
+        command.arg("/PID").arg(pid.to_string()).arg("/T");
+        if force {
+            command.arg("/F");
+        }
+
+        let output = command
+            .output()
+            .context("failed to run taskkill for managed engine process group")?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!(
+            "taskkill failed for managed engine process group {pid}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
     }
 }
 

@@ -12,7 +12,9 @@ from vllm.logger import init_logger
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 logger = init_logger(__name__)
-_RUST_CLI_PATH = Path(__file__).resolve().parents[3] / "vllm-rs"
+_RUST_CLI_PATH = Path(__file__).resolve().parents[3] / (
+    "vllm-rs.exe" if sys.platform.startswith("win") else "vllm-rs"
+)
 _RUST_SUPPORTED_DATASETS = frozenset(
     {
         "custom",
