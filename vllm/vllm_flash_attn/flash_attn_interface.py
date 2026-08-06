@@ -4,6 +4,8 @@
 # ruff: noqa: E501
 
 
+import importlib.util
+
 import torch
 
 # isort: off
@@ -72,16 +74,20 @@ def _is_fa3_supported() -> tuple[bool, str | None]:
 def _is_fa4_supported() -> tuple[bool, str | None]:
     if not FA4_AVAILABLE:
         return False, f"FA4 is unavailable due to: {FA4_UNAVAILABLE_REASON}"
+    if importlib.util.find_spec("cutlass") is None:
+        return False, "FA4 requires the nvidia-cutlass-dsl runtime"
     from vllm.platforms import current_platform
 
     if not (
         current_platform.is_device_capability_family(90)
         or current_platform.is_device_capability_family(100)
         or current_platform.is_device_capability_family(110)
+        or current_platform.is_device_capability_family(120)
     ):
         return (
             False,
-            "FA4 is only supported on devices with compute capability 9.x, 10.x, or 11.x",
+            "FA4 is only supported on devices with compute capability "
+            "9.x, 10.x, 11.x, or 12.x",
         )
     return True, None
 
