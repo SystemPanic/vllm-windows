@@ -967,11 +967,27 @@ def safetensors_weights_iterator(
             yield from unflattened_state_dict.items()
         else:
             with safe_open(st_file, framework="pt") as f:
+                param = None
                 for name in f.keys():  # noqa: SIM118
                     if should_skip_weight(name, local_expert_ids):
                         continue
                     param = f.get_tensor(name)
                     yield name, param
+                if _synchronize_safetensors_mmap_before_close():
+                    # Weight copies are asynchronous. Keep the mmap alive until
+                    # the final copy from this shard has completed.
+                    param = None
+
+
+def _synchronize_safetensors_mmap_before_close() -> bool:
+    if (
+        os.name == "nt"
+        and current_platform.is_cuda()
+        and current_platform.is_integrated_gpu(torch.cuda.current_device())
+    ):
+        torch.cuda.synchronize()
+        return True
+    return False
 
 
 def multi_thread_safetensors_weights_iterator(

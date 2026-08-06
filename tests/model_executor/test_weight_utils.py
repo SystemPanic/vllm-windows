@@ -8,9 +8,28 @@ import pytest
 from huggingface_hub.utils import LocalEntryNotFoundError
 
 from vllm.model_executor.model_loader.weight_utils import (
+    _synchronize_safetensors_mmap_before_close,
     download_weights_from_hf,
     maybe_remap_kv_scale_name,
 )
+
+
+def test_synchronize_safetensors_mmap_on_windows_integrated_gpu(monkeypatch):
+    from vllm.model_executor.model_loader import weight_utils
+
+    synchronize_calls = []
+    monkeypatch.setattr(weight_utils.os, "name", "nt")
+    monkeypatch.setattr(weight_utils.current_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(
+        weight_utils.current_platform, "is_integrated_gpu", lambda device: True
+    )
+    monkeypatch.setattr(weight_utils.torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        weight_utils.torch.cuda, "synchronize", lambda: synchronize_calls.append(0)
+    )
+
+    assert _synchronize_safetensors_mmap_before_close()
+    assert synchronize_calls == [0]
 
 
 def test_download_weights_from_hf():
