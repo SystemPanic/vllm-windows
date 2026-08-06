@@ -178,8 +178,10 @@ static PyObject* method_spinloop(PyObject* self, PyObject* args,
       Py_BEGIN_ALLOW_THREADS
 #if defined(__i386__) || defined(__x86_64__)
       __builtin_ia32_pause();
+#elif defined(_M_ARM64)
+  YieldProcessor();
 #elif defined(__aarch64__)
-        __asm__ volatile("yield" :: : "memory");
+  __asm__ volatile("yield" :: : "memory");
 #endif
       Py_END_ALLOW_THREADS
 #if defined(__i386__) || defined(__x86_64__)

@@ -31,6 +31,11 @@ endif()
 
 # CUDA by default, can be overridden by using -DVLLM_TARGET_DEVICE=... (used by setup.py)
 set(VLLM_TARGET_DEVICE "cuda" CACHE STRING "Target device backend for vLLM")
+option(VLLM_BUILD_DEEPGEMM "Build and package DeepGEMM" ON)
+option(VLLM_BUILD_QUTLASS "Build and package QUTLASS" ON)
+option(VLLM_BUILD_FLASHMLA "Build and package FlashMLA" ON)
+option(VLLM_BUILD_FMHA_SM100 "Package FMHA SM100 sources" ON)
+option(VLLM_BUILD_TML_FA4 "Package TileLang FA4 sources" ON)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Target device: ${VLLM_TARGET_DEVICE}")
 
@@ -1120,6 +1125,18 @@ if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
 
   message(STATUS "Enabling C_stable extension.")
   list(REMOVE_DUPLICATES VLLM_STABLE_EXT_SRC)
+  if(VLLM_GPU_LANG STREQUAL "CUDA" AND WIN32
+     AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+    file(TO_CMAKE_PATH "$ENV{CUDA_PATH}/lib/arm64" VLLM_CUDA_LIBRARY_DIR)
+    set(_CUBLAS_LIBRARY "${VLLM_CUDA_LIBRARY_DIR}/cublas.lib")
+    set(CUDA_cublas_LIBRARY "${_CUBLAS_LIBRARY}" CACHE FILEPATH "" FORCE)
+    foreach(CUDA_TARGET_LIBRARY cublas cublasLt)
+      if(TARGET CUDA::${CUDA_TARGET_LIBRARY})
+        set_target_properties(CUDA::${CUDA_TARGET_LIBRARY} PROPERTIES
+          IMPORTED_LOCATION "${VLLM_CUDA_LIBRARY_DIR}/${CUDA_TARGET_LIBRARY}.lib")
+      endif()
+    endforeach()
+  endif()
   if (DEFINED _CUBLAS_LIBRARY)
     define_extension_target(
       _C_stable_libtorch
@@ -1454,11 +1471,21 @@ endif()
 
 # For CUDA we also build and ship some external projects.
 if (VLLM_GPU_LANG STREQUAL "CUDA")
+  if(VLLM_BUILD_DEEPGEMM)
     include(cmake/external_projects/deepgemm.cmake)
+  endif()
+  if(VLLM_BUILD_FMHA_SM100)
     include(cmake/external_projects/fmha_sm100.cmake)
+  endif()
+  if(VLLM_BUILD_FLASHMLA)
     include(cmake/external_projects/flashmla.cmake)
+  endif()
+  if(VLLM_BUILD_QUTLASS)
     include(cmake/external_projects/qutlass.cmake)
+  endif()
+  if(VLLM_BUILD_TML_FA4)
     include(cmake/external_projects/tml_fa4.cmake)
+  endif()
 
     # vllm-flash-attn should be last as it overwrites some CMake functions
     include(cmake/external_projects/vllm_flash_attn.cmake)

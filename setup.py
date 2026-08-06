@@ -35,10 +35,18 @@ def load_module_from_path(module_name, path):
 ROOT_DIR = Path(__file__).parent
 logger = logging.getLogger(__name__)
 
-PRECOMPILED_RUST_FRONTEND_PATH = ROOT_DIR / "vllm" / "vllm-rs"
+RUST_FRONTEND_FILENAME = (
+    "vllm-rs.exe" if sys.platform.startswith("win") else "vllm-rs"
+)
+PRECOMPILED_RUST_FRONTEND_PATH = ROOT_DIR / "vllm" / RUST_FRONTEND_FILENAME
 # setuptools-rust installs PyO3 artifacts as `<module>.<ext-suffix>`, where the
-# suffix ends with `.so` on Linux and macOS alike (e.g. `_rust_foo.abi3.so`).
-PRECOMPILED_RUST_EXTENSION_MEMBER_REGEX = re.compile(r"vllm/_rust_[^/]*\.so$")
+# suffix ends with `.so` on Linux/macOS and `.pyd` on Windows.
+PRECOMPILED_RUST_EXTENSION_MEMBER_REGEX = re.compile(
+    r"vllm/_rust_[^/]*\.(?:so|pyd)$"
+)
+PRECOMPILED_WINDOWS_EXTENSION_MEMBER_REGEX = re.compile(
+    r"vllm/(?:[^/]+/)*[^/]+\.pyd$"
+)
 
 # cannot import envs directly because it depends on vllm,
 #  which is not installed yet
@@ -61,7 +69,11 @@ def should_require_rust_frontend() -> bool:
 
 
 def get_precompiled_rust_extension_paths() -> list[Path]:
-    return sorted((ROOT_DIR / "vllm").glob("_rust_*.so"))
+    return sorted(
+        path
+        for pattern in ("_rust_*.so", "_rust_*.pyd")
+        for path in (ROOT_DIR / "vllm").glob(pattern)
+    )
 
 
 def get_missing_precompiled_rust_extension_modules() -> list[str]:
@@ -263,6 +275,15 @@ class cmake_build_ext(build_ext):
             "-DCMAKE_BUILD_TYPE={}".format(cfg),
             "-DVLLM_TARGET_DEVICE={}".format(VLLM_TARGET_DEVICE),
         ]
+        for option in (
+            "VLLM_BUILD_DEEPGEMM",
+            "VLLM_BUILD_QUTLASS",
+            "VLLM_BUILD_FLASHMLA",
+            "VLLM_BUILD_FMHA_SM100",
+            "VLLM_BUILD_TML_FA4",
+        ):
+            enabled = "ON" if getattr(envs, option) else "OFF"
+            cmake_args.append(f"-D{option}={enabled}")
 
         verbose = envs.VERBOSE
         if verbose:
@@ -300,9 +321,19 @@ class cmake_build_ext(build_ext):
 
         if VLLM_TARGET_DEVICE == 'cuda':
             if IS_WINDOWS:
+                cuda_lib_arch = (
+                    "arm64"
+                    if platform.machine().lower() in ("arm64", "aarch64")
+                    else "x64"
+                )
                 cmake_args += [
                     f'-Dnvtx3_dir={CUDA_HOME}\\include',
-                    f'-DCUDA_cublas_LIBRARY={CUDA_HOME}\\lib\\x64\\cublas.lib'
+                    f'-DCUDAToolkit_LIBRARY_DIR={CUDA_HOME}\\lib\\{cuda_lib_arch}',
+                    f'-DCUDA_cublas_LIBRARY={CUDA_HOME}\\lib\\{cuda_lib_arch}\\cublas.lib',
+                    f'-DCUDA_cuda_driver_LIBRARY={CUDA_HOME}\\lib\\{cuda_lib_arch}\\cuda.lib',
+                    f'-DCUDA_cudart_LIBRARY={CUDA_HOME}\\lib\\{cuda_lib_arch}\\cudart.lib',
+                    f'-DCUDA_CUDART_LIBRARY={CUDA_HOME}\\lib\\{cuda_lib_arch}\\cudart.lib',
+                    f'-DCUDA_nvrtc_LIBRARY={CUDA_HOME}\\lib\\{cuda_lib_arch}\\nvrtc.lib',
                 ]
 
         # Override the base directory for FetchContent downloads to $ROOT/.deps
@@ -822,7 +853,7 @@ class precompiled_wheel_utils:
                         }
                     )
                 if extract_rust_frontend:
-                    exact_members.add("vllm/vllm-rs")
+                    exact_members.add(f"vllm/{RUST_FRONTEND_FILENAME}")
 
                 flash_attn_regex = re.compile(
                     r"vllm/vllm_flash_attn/(?:[^/.][^/]*/)*(?!\.)[^/]*\.py"
@@ -846,6 +877,14 @@ class precompiled_wheel_utils:
                 file_members = []
                 for member in wheel.filelist:
                     if member.filename in exact_members:
+                        file_members.append(member)
+                        continue
+                    if (
+                        extract_extensions
+                        and PRECOMPILED_WINDOWS_EXTENSION_MEMBER_REGEX.match(
+                            member.filename
+                        )
+                    ):
                         file_members.append(member)
                         continue
                     if (
@@ -1174,9 +1213,9 @@ if _is_cuda():
     ext_modules.append(
         CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa4_cutedsl_C", optional=True)
     )
-    if USE_PRECOMPILED_EXTENSIONS or (
+    if envs.VLLM_BUILD_FLASHMLA and (USE_PRECOMPILED_EXTENSIONS or (
         CUDA_HOME and get_nvcc_cuda_version() >= Version("12.9")
-    ):
+    )):
         # FlashMLA requires CUDA 12.9 or later
         # Optional since this doesn't get built (produce an .so file) when
         # not targeting a hopper system
@@ -1184,17 +1223,22 @@ if _is_cuda():
         ext_modules.append(
             CMakeExtension(name="vllm._flashmla_extension_C", optional=True)
         )
-    if envs.VLLM_USE_PRECOMPILED or (
+    if envs.VLLM_BUILD_DEEPGEMM and (envs.VLLM_USE_PRECOMPILED or (
         CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")
-    ):
+    )):
         # DeepGEMM requires CUDA 12.3+ (SM90/SM100)
         # Optional since it won't build on unsupported architectures
         ext_modules.append(CMakeExtension(name="vllm._deep_gemm_C", optional=True))
+    if envs.VLLM_BUILD_QUTLASS and (envs.VLLM_USE_PRECOMPILED or (
+        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.8")
+    )):
         ext_modules.append(CMakeExtension(name="vllm._qutlass_C", optional=True))
     # fmha_sm100 is a Python/CuTe-DSL package installed into vllm.third_party.
-    ext_modules.append(CMakeExtension(name="vllm.fmha_sm100", optional=True))
+    if envs.VLLM_BUILD_FMHA_SM100:
+        ext_modules.append(CMakeExtension(name="vllm.fmha_sm100", optional=True))
     # tml-fa4 is copied into an isolated vllm.third_party package.
-    ext_modules.append(CMakeExtension(name="vllm.tml_fa4", optional=True))
+    if envs.VLLM_BUILD_TML_FA4:
+        ext_modules.append(CMakeExtension(name="vllm.tml_fa4", optional=True))
 
 if _is_cpu():
     import platform
@@ -1262,7 +1306,7 @@ if USE_PRECOMPILED_RUST_FRONTEND:
 # If the rust frontend binary is already present in the source tree (e.g.,
 # pre-built in a separate Docker build stage), ship it as-is.
 if PRECOMPILED_RUST_FRONTEND_PATH.exists():
-    add_vllm_package_data("vllm-rs")
+    add_vllm_package_data(RUST_FRONTEND_FILENAME)
 for rust_extension_path in get_precompiled_rust_extension_paths():
     add_vllm_package_data(rust_extension_path.name)
 

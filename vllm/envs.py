@@ -104,6 +104,11 @@ if TYPE_CHECKING:
     VLLM_BUILD_PIPELINE: str = "local"
     VLLM_BUILD_URL: str = ""
     VLLM_IMAGE_TAG: str = ""
+    VLLM_BUILD_DEEPGEMM: bool = True
+    VLLM_BUILD_QUTLASS: bool = True
+    VLLM_BUILD_FLASHMLA: bool = True
+    VLLM_BUILD_FMHA_SM100: bool = True
+    VLLM_BUILD_TML_FA4: bool = True
     VLLM_KEEP_ALIVE_ON_ENGINE_DEATH: bool = False
     CMAKE_BUILD_TYPE: Literal["Debug", "Release", "RelWithDebInfo"] | None = None
     VERBOSE: bool = False
@@ -572,7 +577,8 @@ def _resolve_rust_frontend_path() -> str | None:
 
     if raw.lower() in ("auto", "1", "true"):
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate = os.path.join(pkg_dir, "vllm-rs")
+        filename = "vllm-rs.exe" if sys.platform.startswith("win") else "vllm-rs"
+        candidate = os.path.join(pkg_dir, filename)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
 
@@ -656,6 +662,21 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_BUILD_PIPELINE": lambda: os.environ.get("VLLM_BUILD_PIPELINE", "local"),
     "VLLM_BUILD_URL": lambda: os.environ.get("VLLM_BUILD_URL", ""),
     "VLLM_IMAGE_TAG": lambda: os.environ.get("VLLM_IMAGE_TAG", ""),
+    "VLLM_BUILD_DEEPGEMM": lambda: bool(
+        int(os.environ.get("VLLM_BUILD_DEEPGEMM", "1"))
+    ),
+    "VLLM_BUILD_QUTLASS": lambda: bool(
+        int(os.environ.get("VLLM_BUILD_QUTLASS", "1"))
+    ),
+    "VLLM_BUILD_FLASHMLA": lambda: bool(
+        int(os.environ.get("VLLM_BUILD_FLASHMLA", "1"))
+    ),
+    "VLLM_BUILD_FMHA_SM100": lambda: bool(
+        int(os.environ.get("VLLM_BUILD_FMHA_SM100", "1"))
+    ),
+    "VLLM_BUILD_TML_FA4": lambda: bool(
+        int(os.environ.get("VLLM_BUILD_TML_FA4", "1"))
+    ),
     # CMake build type
     # If not set, defaults to "Debug" or "RelWithDebInfo"
     # Available options: "Debug", "Release", "RelWithDebInfo"

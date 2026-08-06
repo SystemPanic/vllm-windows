@@ -352,8 +352,14 @@ def find_loaded_library(lib_name: str) -> str | None:
                 cuda_major_version += "0"
             if cuda_path:
                 dll_bin_path = os.path.join(cuda_path, "bin")
-                if os.path.exists(os.path.join(cuda_path, "bin", "x64")):
-                    dll_bin_path = os.path.join(cuda_path, "bin", "x64")
+                cuda_bin_arch = (
+                    "arm64"
+                    if platform.machine().lower() in ("arm64", "aarch64")
+                    else "x64"
+                )
+                arch_bin_path = os.path.join(cuda_path, "bin", cuda_bin_arch)
+                if os.path.exists(arch_bin_path):
+                    dll_bin_path = arch_bin_path
                 cudart_path = os.path.abspath(
                     os.path.join(dll_bin_path, f"cudart64_{cuda_major_version}.dll"))
             else:
