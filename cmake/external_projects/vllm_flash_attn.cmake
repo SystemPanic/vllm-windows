@@ -41,6 +41,7 @@ else()
           GIT_REPOSITORY https://github.com/vllm-project/flash-attention.git
           GIT_TAG ed4b7342bc8f0489dd9b649d5288867e35fc6a32
           GIT_PROGRESS TRUE
+          GIT_SUBMODULES csrc/cutlass
           # Don't share the vllm-flash-attn build between build types
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
   )
@@ -67,6 +68,15 @@ endif()
 
 FetchContent_MakeAvailable(vllm-flash-attn)
 message(STATUS "vllm-flash-attn is available at ${vllm-flash-attn_SOURCE_DIR}")
+
+# FA2 normally ships Ampere SASS plus forward-compatible PTX. CUDA 13 PTX can
+# be newer than the installed Windows ARM64 driver, so build native Blackwell
+# SASS and avoid a driver-side PTX JIT at runtime.
+if(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+  set_target_properties(_vllm_fa2_C PROPERTIES
+    CUDA_ARCHITECTURES "120-real"
+  )
+endif()
 
 # After MakeAvailable, also force the flag onto the actual targets in case
 # the subproject's CMakeLists.txt overrides CMAKE_CUDA_FLAGS with its own
