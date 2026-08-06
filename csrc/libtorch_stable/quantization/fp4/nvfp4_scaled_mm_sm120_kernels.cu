@@ -124,6 +124,21 @@ struct Fp4GemmSm120 {
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 };
 
+#if defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
+template <typename GemmKernel>
+__global__ __launch_bounds__(
+    GemmKernel::MaxThreadsPerBlock,
+    GemmKernel::
+        MinBlocksPerMultiprocessor) void cutlass_kernel_indirect(typename GemmKernel::
+                                                                     Params const*
+                                                                         params) {
+  extern __shared__ char smem[];
+  GemmKernel op;
+  op(*params, smem);
+  cutlass::arch::synclog_print();
+}
+#endif
+
 template <typename Gemm>
 typename Gemm::Arguments args_from_options(torch::stable::Tensor& D,
                                            torch::stable::Tensor const& A,
@@ -180,20 +195,65 @@ void runGemm(torch::stable::Tensor& D, torch::stable::Tensor const& A,
              torch::stable::Tensor const& B_sf,
              torch::stable::Tensor const& alpha, int M, int N, int K,
              cudaStream_t stream) {
-  Gemm gemm;
-
   auto arguments = args_from_options<Gemm>(D, A, B, A_sf, B_sf, alpha, M, N, K);
 
+#if defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
+  using GemmKernel = typename Gemm::GemmKernel;
+  using Params = typename GemmKernel::Params;
+  constexpr size_t params_alignment = alignof(Params);
+  constexpr size_t params_storage_size =
+      (sizeof(Params) + params_alignment - 1) / params_alignment *
+      params_alignment;
+  size_t workspace_size = Gemm::get_workspace_size(arguments);
+  auto workspace = torch::stable::empty(params_storage_size + workspace_size,
+                                        torch::headeronly::ScalarType::Byte,
+                                        std::nullopt, A.device());
+  auto* params_device = static_cast<uint8_t*>(workspace.data_ptr());
+  STD_TORCH_CHECK(
+      reinterpret_cast<uintptr_t>(params_device) % params_alignment == 0,
+      "CUTLASS workspace does not satisfy Params alignment");
+  void* gemm_workspace = params_device + params_storage_size;
+
+  CUTLASS_CHECK(Gemm::can_implement(arguments));
+  CUTLASS_CHECK(
+      GemmKernel::initialize_workspace(arguments, gemm_workspace, stream));
+
+  Params params =
+      GemmKernel::to_underlying_arguments(arguments, gemm_workspace);
+  auto cuda_status = cudaMemcpyAsync(params_device, &params, sizeof(Params),
+                                     cudaMemcpyHostToDevice, stream);
+  STD_TORCH_CHECK(cuda_status == cudaSuccess, "Failed to copy CUTLASS Params: ",
+                  cudaGetErrorString(cuda_status));
+
+  constexpr int smem_size = GemmKernel::SharedStorageSize;
+  if constexpr (smem_size >= (48 << 10)) {
+    cuda_status = cudaFuncSetAttribute(
+        cutlass_kernel_indirect<GemmKernel>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+    STD_TORCH_CHECK(cuda_status == cudaSuccess,
+                    "Failed to configure CUTLASS dynamic shared memory: ",
+                    cudaGetErrorString(cuda_status));
+  }
+
+  auto grid = GemmKernel::get_grid_shape(params);
+  auto block = GemmKernel::get_block_shape();
+  cutlass_kernel_indirect<GemmKernel><<<grid, block, smem_size, stream>>>(
+      reinterpret_cast<Params const*>(params_device));
+  cuda_status = cudaGetLastError();
+  STD_TORCH_CHECK(cuda_status == cudaSuccess,
+                  "Failed to launch CUTLASS NVFP4 kernel: ",
+                  cudaGetErrorString(cuda_status));
+#else
+  Gemm gemm;
   size_t workspace_size = Gemm::get_workspace_size(arguments);
   auto workspace =
       torch::stable::empty(workspace_size, torch::headeronly::ScalarType::Byte,
                            std::nullopt, A.device());
 
   CUTLASS_CHECK(gemm.can_implement(arguments));
-
   CUTLASS_CHECK(gemm.initialize(arguments, workspace.data_ptr(), stream));
-
   CUTLASS_CHECK(gemm.run(arguments, workspace.data_ptr(), stream));
+#endif
 }
 
 namespace {

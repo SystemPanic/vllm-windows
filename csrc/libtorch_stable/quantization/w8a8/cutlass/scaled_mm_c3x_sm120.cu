@@ -14,10 +14,17 @@ void cutlass_scaled_mm_sm120(torch::stable::Tensor& c,
                              torch::stable::Tensor const& a_scales,
                              torch::stable::Tensor const& b_scales,
                              std::optional<torch::stable::Tensor> const& bias) {
+  #if defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
+  dispatch_scaled_mm(c, a, b, a_scales, b_scales, bias,
+                     vllm::cutlass_scaled_mm_sm120_fp8,
+                     nullptr,   // int8 not supported on SM120
+                     nullptr);  // blockwise FP8 is not built on Windows ARM64
+  #else
   dispatch_scaled_mm(c, a, b, a_scales, b_scales, bias,
                      vllm::cutlass_scaled_mm_sm120_fp8,
                      nullptr,  // int8 not supported on SM120
                      vllm::cutlass_scaled_mm_blockwise_sm120_fp8);
+  #endif
 }
 
 #endif
