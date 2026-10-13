@@ -1196,6 +1196,16 @@ class GroupCoordinator:
         handles: list[Handle] = [self.isend_object(metadata_list, dst=dst)]
 
         sent_tensors: list[torch.Tensor] = []
+        # Check if we need to use pynccl for CUDA tensors because
+        # torch.distributed NCCL backend is not available (e.g. on Windows).
+        _use_pynccl = (
+            self.device_communicator is not None
+            and self.device_communicator.pynccl_comm is not None
+            and not self.device_communicator.pynccl_comm.disabled
+            and torch.distributed.get_backend(group) != "nccl"
+        )
+        if _use_pynccl:
+            self.device_communicator.pynccl_comm.group_start()
         for key, tensor in zip(tensor_keys, tensor_list):
             if tensor.numel() == 0:
                 continue
@@ -1205,13 +1215,17 @@ class GroupCoordinator:
             ):
                 tensor = tensor.reshape(all_gather_size, -1)[all_gather_rank]
 
-            comm_group = metadata_group if tensor.is_cpu else group
-            handle = torch.distributed.isend(
-                tensor, dst=self.ranks[dst], group=comm_group
-            )
-            if tensor.is_cuda:
+            if _use_pynccl and tensor.is_cuda:
+                self.device_communicator.pynccl_comm.send(tensor, dst)
                 tensor.record_stream(torch.cuda.current_stream(tensor.device))
-            handles.append(handle)
+            else:
+                comm_group = metadata_group if tensor.is_cpu else group
+                handle = torch.distributed.isend(
+                    tensor, dst=self.ranks[dst], group=comm_group
+                )
+                if tensor.is_cuda:
+                    tensor.record_stream(torch.cuda.current_stream(tensor.device))
+                handles.append(handle)
             sent_tensors.append(tensor)
 
         # Self-retain for fire-and-forget callers: keep the handles and
@@ -1225,6 +1239,9 @@ class GroupCoordinator:
         if pending is None:
             self._pending_isends = pending = deque()
         pending.append((handles, sent_tensors))
+
+        if _use_pynccl:
+            self.device_communicator.pynccl_comm.group_end()
 
         return handles
 
@@ -1305,6 +1322,16 @@ class GroupCoordinator:
         handles: list[Handle] = []
         postprocess: list[Callable[[], None]] = []
 
+        # Check if we need to use pynccl for CUDA tensors because
+        # torch.distributed NCCL backend is not available (e.g. on Windows).
+        _use_pynccl = (
+            self.device_communicator is not None
+            and self.device_communicator.pynccl_comm is not None
+            and not self.device_communicator.pynccl_comm.disabled
+            and torch.distributed.get_backend(group) != "nccl"
+        )
+        if _use_pynccl:
+            self.device_communicator.pynccl_comm.group_start()
         for key, value in recv_metadata_list:
             if isinstance(value, TensorMetadata):
                 full_tensor = torch.empty(
@@ -1321,11 +1348,15 @@ class GroupCoordinator:
                     slice_tensor = full_tensor.reshape(all_gather_size, -1)[
                         all_gather_rank
                     ]
-                    comm_group = metadata_group if slice_tensor.is_cpu else group
-                    handle = torch.distributed.irecv(
-                        slice_tensor, src=self.ranks[src], group=comm_group
-                    )
-                    handles.append(handle)
+                    if _use_pynccl and slice_tensor.is_cuda:
+                        self.device_communicator.pynccl_comm.recv(
+                            slice_tensor, src)
+                    else:
+                        comm_group = metadata_group if slice_tensor.is_cpu else group
+                        handle = torch.distributed.irecv(
+                            slice_tensor, src=self.ranks[src], group=comm_group
+                        )
+                        handles.append(handle)
 
                     def _postprocess(
                         key: str = key,
@@ -1341,14 +1372,20 @@ class GroupCoordinator:
                     postprocess.append(_postprocess)
                     tensor_dict[key] = slice_tensor
                 else:
-                    comm_group = metadata_group if full_tensor.is_cpu else group
-                    handle = torch.distributed.irecv(
-                        full_tensor, src=self.ranks[src], group=comm_group
-                    )
-                    handles.append(handle)
+                    if _use_pynccl and full_tensor.is_cuda:
+                        self.device_communicator.pynccl_comm.recv(
+                            full_tensor, src)
+                    else:
+                        comm_group = metadata_group if full_tensor.is_cpu else group
+                        handle = torch.distributed.irecv(
+                            full_tensor, src=self.ranks[src], group=comm_group
+                        )
+                        handles.append(handle)
                     tensor_dict[key] = full_tensor
             else:
                 tensor_dict[key] = value
+        if _use_pynccl:
+            self.device_communicator.pynccl_comm.group_end()
 
         return tensor_dict, handles, postprocess
 

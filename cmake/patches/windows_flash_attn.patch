@@ -1,0 +1,38 @@
+diff --git a/csrc/flash_attn/flash_api.cpp b/csrc/flash_attn/flash_api.cpp
+index 60d29f2..dc4e66d 100644
+--- a/csrc/flash_attn/flash_api.cpp
++++ b/csrc/flash_attn/flash_api.cpp
+@@ -21,7 +21,6 @@
+ #include <tuple>
+ #include <vector>
+ 
+-
+ #ifndef FLASHATTENTION_DISABLE_DROPOUT
+ #include <ATen/cuda/CUDAGeneratorImpl.h>  // For at::PhiloxCudaState / at::CUDAGeneratorImpl (default-generator dropout path)
+ #include "philox_unpack.cuh"  // For at::cuda::philox::unpack
+@@ -40,6 +39,10 @@
+ #define CHECK_SHAPE(x, ...) STD_TORCH_CHECK(x.sizes().equals({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
+ #define CHECK_CONTIGUOUS(x) STD_TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
+ 
++#ifndef M_LOG2E
++#define M_LOG2E 1.44269504088896340736
++#endif
++
+ namespace FLASH_NAMESPACE {
+ 
+ using torch::stable::Tensor;
+diff --git a/csrc/flash_attn/src/softmax.h b/csrc/flash_attn/src/softmax.h
+index 01589ad..6f94ae3 100644
+--- a/csrc/flash_attn/src/softmax.h
++++ b/csrc/flash_attn/src/softmax.h
+@@ -14,6 +14,10 @@
+ #include "philox.cuh"
+ #include "utils.h"
+ 
++#ifndef M_LOG2E
++#define M_LOG2E 1.44269504088896340736
++#endif
++
+ namespace FLASH_NAMESPACE {
+ 
+ using namespace cute;

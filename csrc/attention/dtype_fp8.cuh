@@ -1,7 +1,7 @@
 #pragma once
 
 #include "attention_generic.cuh"
-#include "torch_utils.h"
+#include "../torch_utils.h"
 
 #include <stdint.h>
 #ifdef ENABLE_FP8

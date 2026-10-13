@@ -7,6 +7,9 @@
   #include <cuda_fp8.h>
 #endif
 
+#ifdef _MSC_VER
+#define _USE_MATH_DEFINES
+#endif
 #include <cmath>
 #include <type_traits>
 
@@ -1254,11 +1257,11 @@ void situ_and_mul_quant(torch::stable::Tensor& out,    // [..., d]  (fp8)
                     "situ_and_mul_quant: scale shape must be "
                     "[num_tokens, d/group_size]");
     dim3 grid(GRID_DIM);
+#ifndef USE_ROCM
     VLLM_STABLE_DISPATCH_FLOATING_TYPES(
         input.scalar_type(), "situ_and_mul_quant_group_kernel", [&] {
           VLLM_STABLE_DISPATCH_FP8_TYPES(
               out.scalar_type(), "situ_and_mul_quant_group_kernel_fp8", [&] {
-#ifndef USE_ROCM
                 // The pipelined kernel's float2-per-lane geometry assumes a
                 // 32-lane warp (GROUP_SIZE == 4 * WARP_SIZE); on HIP (64-lane)
                 // fall back to the WARP_SIZE-generic scalar kernel.
@@ -1284,7 +1287,6 @@ void situ_and_mul_quant(torch::stable::Tensor& out,    // [..., d]  (fp8)
                     return;
                   }
                 }
-#endif
                 const int num_warps = std::min(num_groups, 1024 / WARP_SIZE);
                 dim3 block(num_warps * WARP_SIZE);
                 vllm::situ_and_mul_quant_group_scalar_kernel<scalar_t, fp8_t,
@@ -1297,6 +1299,24 @@ void situ_and_mul_quant(torch::stable::Tensor& out,    // [..., d]  (fp8)
                         num_valid_tokens_ptr, topk);
               });
         });
+#else
+    VLLM_STABLE_DISPATCH_FLOATING_TYPES(
+        input.scalar_type(), "situ_and_mul_quant_group_kernel", [&] {
+          VLLM_STABLE_DISPATCH_FP8_TYPES(
+              out.scalar_type(), "situ_and_mul_quant_group_kernel_fp8", [&] {
+                const int num_warps = std::min(num_groups, 1024 / WARP_SIZE);
+                dim3 block(num_warps * WARP_SIZE);
+                vllm::situ_and_mul_quant_group_scalar_kernel<scalar_t, fp8_t,
+                                                             128>
+                    <<<grid, block, 0, stream>>>(
+                        out.mutable_data_ptr<fp8_t>(),
+                        scale.mutable_data_ptr<float>(),
+                        input.const_data_ptr<scalar_t>(), d, num_groups,
+                        (float)beta, (float)linear_beta, num_tokens,
+                        num_valid_tokens_ptr, topk);
+              });
+        });
+#endif
   }
 }
 namespace vllm {

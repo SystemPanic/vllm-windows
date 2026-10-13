@@ -1102,7 +1102,7 @@ def get_engine_zmq_addresses(
         client_local_only = False
 
     def _addr() -> str:
-        if client_local_only:
+        if client_local_only and os.name != "nt":
             return get_open_zmq_ipc_path()
         return get_tcp_uri(host, 0 if defer_api_server_ports else get_open_port())
 
@@ -1224,7 +1224,7 @@ def launch_core_engines(
     handshake_local_only = offline_mode or local_engine_count == dp_size
 
     # NOTE(yongji): handling scaling from intra-node to inter-node
-    if parallel_config.enable_elastic_ep:
+    if parallel_config.enable_elastic_ep or os.name == "nt":
         handshake_local_only = False
 
     handshake_address = get_engine_client_zmq_addr(
@@ -1235,7 +1235,12 @@ def launch_core_engines(
 
     if local_engines_only and dp_rank > 0:
         assert not handshake_local_only
-        local_handshake_address = get_open_zmq_ipc_path()
+        if os.name == "nt":
+            local_handshake_address = get_engine_client_zmq_addr(
+                handshake_local_only, host, get_open_port()
+            )
+        else:
+            local_handshake_address = get_open_zmq_ipc_path()
         client_handshake_address = local_handshake_address
     else:
         local_handshake_address = handshake_address
@@ -1297,7 +1302,7 @@ def wait_for_engine_startup(
     )
 
     # 1. Engine processes
-    if isinstance(launch.engine_manager, CoreEngineProcManager):
+    if isinstance(launch.engine_manager, CoreEngineProcManager) and os.name != "nt":
         for sentinel in launch.engine_manager.sentinels():
             poller.register(sentinel, zmq.POLLIN)
     # 2. DP Coordinator process, if present

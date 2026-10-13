@@ -463,9 +463,20 @@ class InductorAdaptor(CompilerInterface):
             return
         # Keep artifacts together unless the caller supplies a Triton cache.
         inductor_cache = os.path.join(self.base_cache_dir, "inductor_cache")
+        triton_cache = os.path.join(self.base_cache_dir, "triton_cache")
+
+        # VLLM_WINDOWS_MULTIPROCESS_CACHE_ISOLATION SystemPanic/vllm-windows/issues/85
+        # Preserve deterministic per-rank caches on Windows. This prevents
+        # concurrent Triton readers from opening artifacts still locked by a
+        # different worker process.
+        if os.name == "nt":
+            cache_rank = os.environ.get("VLLM_WINDOWS_CACHE_RANK")
+            if cache_rank:
+                inductor_cache = os.path.join(inductor_cache, cache_rank)
+                triton_cache = os.path.join(triton_cache, cache_rank)
+
         os.makedirs(inductor_cache, exist_ok=True)
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = inductor_cache
-        triton_cache = os.environ.get("TRITON_CACHE_DIR")
         # A directory assigned by an earlier adaptor is still a model-local
         # default, rather than a caller override for subsequent models.
         if triton_cache is None or triton_cache == _last_inductor_triton_cache_dir:

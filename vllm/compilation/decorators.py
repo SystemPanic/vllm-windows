@@ -550,6 +550,15 @@ def _support_torch_compile(
             # Hash-level dir; shared across ranks on the same node.
             self.compilation_config.local_cache_dir = cache_dir
             inductor_cache = os.path.join(cache_dir, "inductor_cache")
+
+            # VLLM_WINDOWS_MULTIPROCESS_CACHE_ISOLATION SystemPanic/vllm-windows/issues/85
+            # AOT execution and later recompilation must use the same worker-
+            # specific cache selected before model initialization.
+            if os.name == "nt":
+                cache_rank = os.environ.get("VLLM_WINDOWS_CACHE_RANK")
+                if cache_rank:
+                    inductor_cache = os.path.join(inductor_cache, cache_rank)
+
             os.makedirs(inductor_cache, exist_ok=True)
             # Process-wide: post-load execution, CUDA-graph capture, and later
             # autotune/recompile all need to write under {hash}/inductor_cache/.

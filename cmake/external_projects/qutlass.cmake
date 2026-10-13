@@ -21,9 +21,13 @@ if(QUTLASS_SRC_DIR)
   set(qutlass_SOURCE_DIR "${QUTLASS_SRC_DIR}")
   set(qutlass_BINARY_DIR "${CMAKE_BINARY_DIR}/qutlass-binary-dir-unused")
 else()
-  set(_QUTLASS_UPSTREAM_REPO "https://github.com/IST-DASLab/qutlass.git")
-  set(_QUTLASS_UPSTREAM_TAG "e74319e3405ce6d71965732880f5dc1f52371f64")
-
+  if(WIN32)
+    set(_QUTLASS_UPSTREAM_REPO "https://github.com/SystemPanic/qutlass.git")
+    set(_QUTLASS_UPSTREAM_TAG "83b9d7f80dc73b4c1bf01c16b575da3041a97a73")
+  else()
+    set(_QUTLASS_UPSTREAM_REPO "https://github.com/IST-DASLab/qutlass.git")
+    set(_QUTLASS_UPSTREAM_TAG "e74319e3405ce6d71965732880f5dc1f52371f64")
+  endif()
   set(_qutlass_fc_root "${FETCHCONTENT_BASE_DIR}")
   if(NOT _qutlass_fc_root)
     set(_qutlass_fc_root "${CMAKE_BINARY_DIR}/_deps")
@@ -86,15 +90,20 @@ endif()
 
 if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8 AND QUTLASS_ARCHS)
   set(QUTLASS_SOURCES
-    csrc/qutlass_registration.cpp
     ${qutlass_SOURCE_DIR}/qutlass/csrc/bindings.cpp
     ${qutlass_SOURCE_DIR}/qutlass/csrc/gemm.cu
     ${qutlass_SOURCE_DIR}/qutlass/csrc/gemm_ada.cu
     ${qutlass_SOURCE_DIR}/qutlass/csrc/fused_quantize_mx.cu
+	${qutlass_SOURCE_DIR}/qutlass/csrc/fused_quantize_mx_mask.cu
     ${qutlass_SOURCE_DIR}/qutlass/csrc/fused_quantize_nv.cu
     ${qutlass_SOURCE_DIR}/qutlass/csrc/fused_quantize_mx_sm100.cu
     ${qutlass_SOURCE_DIR}/qutlass/csrc/fused_quantize_nv_sm100.cu
+	${qutlass_SOURCE_DIR}/qutlass/csrc/quartet_bwd_sm120.cu
   )
+  
+  if(NOT WIN32)
+    list(APPEND QUTLASS_SOURCES csrc/qutlass_registration.cpp)
+  endif()
 
   set(QUTLASS_INCLUDES
     ${qutlass_SOURCE_DIR}
@@ -129,23 +138,59 @@ if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.8 AND QUTLASS_ARCHS)
     CUDA_ARCHS "${QUTLASS_ARCHS}"
   )
 
-  define_extension_target(
-    _qutlass_C
-    DESTINATION vllm
-    LANGUAGE ${VLLM_GPU_LANG}
-    SOURCES ${QUTLASS_SOURCES}
-    COMPILE_FLAGS ${VLLM_GPU_FLAGS}
-    ARCHITECTURES ${VLLM_GPU_ARCHES}
-    INCLUDE_DIRECTORIES ${QUTLASS_INCLUDES}
-    USE_SABI 3
-    WITH_SOABI)
+  if(WIN32)
+    define_extension_target(
+      _qutlass_C
+      DESTINATION vllm
+      LANGUAGE ${VLLM_GPU_LANG}
+      SOURCES ${QUTLASS_SOURCES}
+      COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+      ARCHITECTURES ${VLLM_GPU_ARCHES}
+      INCLUDE_DIRECTORIES ${QUTLASS_INCLUDES}
+      WITH_SOABI)
+    target_compile_definitions(_qutlass_C PRIVATE
+      QUTLASS_MINIMAL_BUILD=1
+      TARGET_CUDA_ARCH=${QUTLASS_TARGET_CC}
+      CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1
+      USE_CUDA)
+    # Link torch_python for pybind11 type_caster<at::Tensor> symbols
+    find_library(_TORCH_PYTHON_LIB torch_python
+    PATHS "${TORCH_INSTALL_PREFIX}/lib"
+          "$ENV{TORCH_INSTALL_PREFIX}/lib"
+          "${Python_SITEARCH}/torch/lib"
+          "${TORCH_LIBRARY_DIR}"
+    NO_DEFAULT_PATH)
+    if(NOT _TORCH_PYTHON_LIB)
+    # Fallback: try the site-packages torch/lib directory directly
+      get_filename_component(_torch_lib_dir "${TORCH_LIBRARIES}" DIRECTORY)
+      find_library(_TORCH_PYTHON_LIB torch_python PATHS "${_torch_lib_dir}" NO_DEFAULT_PATH)
+    endif()
+    if(_TORCH_PYTHON_LIB)
+      target_link_libraries(_qutlass_C PRIVATE "${_TORCH_PYTHON_LIB}")
+    else()
+      message(WARNING "[QUTLASS] torch_python library not found; link may fail with unresolved pybind11 symbols.")
+    endif()
 
-  target_compile_definitions(_qutlass_C PRIVATE
-    QUTLASS_MINIMAL_BUILD=1
-    QUTLASS_DISABLE_PYBIND=1
-    TARGET_CUDA_ARCH=${QUTLASS_TARGET_CC}
-    CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1
-    USE_CUDA)
+    # Suppress LIBCMT conflict with the /MD runtime used by torch
+    target_link_options(_qutlass_C PRIVATE "/NODEFAULTLIB:LIBCMT")
+  else()
+    define_extension_target(
+      _qutlass_C
+      DESTINATION vllm
+      LANGUAGE ${VLLM_GPU_LANG}
+      SOURCES ${QUTLASS_SOURCES}
+      COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+      ARCHITECTURES ${VLLM_GPU_ARCHES}
+      INCLUDE_DIRECTORIES ${QUTLASS_INCLUDES}
+      USE_SABI 3
+      WITH_SOABI)
+    target_compile_definitions(_qutlass_C PRIVATE
+      QUTLASS_MINIMAL_BUILD=1
+      QUTLASS_DISABLE_PYBIND=1
+      TARGET_CUDA_ARCH=${QUTLASS_TARGET_CC}
+      CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1
+      USE_CUDA)
+  endif()
 
   set_property(SOURCE ${QUTLASS_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr --use_fast_math -O3>
