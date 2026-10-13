@@ -23,7 +23,16 @@ from typing import (
 )
 
 import torch
-import uvloop
+import os
+if os.name == "nt":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 from torch.autograd.profiler import record_function
 
 import vllm.envs as envs
@@ -298,7 +307,6 @@ class RustFrontendProcessManager:
         stats_update_address: str | None = None,
         grpc_sock: Any | None = None,
     ):
-        import os
         import subprocess
 
         listen_fd = sock.fileno()
@@ -524,7 +532,7 @@ def run_api_server_worker_proc(
     set_process_title("APIServer", str(server_index))
     decorate_logs()
 
-    uvloop.run(
+    uvloop_impl.run(
         run_server_worker(listen_address, sock, args, client_config, **uvicorn_kwargs)
     )
 

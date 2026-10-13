@@ -207,7 +207,14 @@ async def run_server_worker(
 
 
 def main():
-    import uvloop
+    if os.name == "nt":
+        import winloop as uvloop_impl
+        # Windows does not support fork
+        os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+        # Disable libuv on Windows by default
+        os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+    else:
+        import uvloop as uvloop_impl
 
     from vllm.entrypoints.serve.utils.api_utils import cli_env_setup
     from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -229,7 +236,7 @@ def main():
     configure_logging_from_args(args)
     validate_parsed_serve_args(args)
 
-    uvloop.run(run_server(args))
+    uvloop_impl.run(run_server(args))
 
 
 if __name__ == "__main__":

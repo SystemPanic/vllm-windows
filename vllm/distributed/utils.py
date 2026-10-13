@@ -38,7 +38,7 @@ logger = init_logger(__name__)
 # We prefer to use os.sched_yield as it results in tighter polling loops,
 # measured to be around 3e-7 seconds. However on earlier versions of Python
 # os.sched_yield() does not release the GIL, so we fall back to time.sleep(0)
-USE_SCHED_YIELD = sys.version_info[:3] >= (3, 11, 1)
+USE_SCHED_YIELD = sys.platform != "win32" and sys.version_info[:3] >= (3, 11, 1)
 
 
 def sched_yield():

@@ -979,7 +979,11 @@ namespace hist4096 = topk_histogram_4096;
     }                                   \
   }
 
+#ifdef _MSC_VER
+#define FLASHINFER_INLINE __forceinline __device__
+#else
 #define FLASHINFER_INLINE inline __attribute__((always_inline)) __device__
+#endif
 
 template <typename T, size_t N>
 struct vec_t {

@@ -4,7 +4,16 @@
 import argparse
 import inspect
 
-import uvloop
+import os
+
+if os.name == "nt":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 
 from vllm.entrypoints.cli.types import CLISubcommand
 from vllm.entrypoints.launchers.cli_args import (
@@ -61,7 +70,7 @@ class RenderSubcommand(LaunchSubcommandBase):
 
     @staticmethod
     def cmd(args: argparse.Namespace) -> None:
-        uvloop.run(run_launch_fastapi(args))
+        uvloop_impl.run(run_launch_fastapi(args))
 
 
 class LaunchSubcommand(CLISubcommand):

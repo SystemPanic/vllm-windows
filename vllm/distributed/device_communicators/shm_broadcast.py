@@ -17,6 +17,7 @@ from pickle import PickleBuffer
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
 
+import os
 import torch
 import torch.distributed as dist
 import zmq
@@ -38,10 +39,12 @@ from vllm.platforms import current_platform
 from vllm.utils.cpu_resource_utils import check_cgroup_memory_available
 from vllm.utils.network_utils import (
     get_ip,
+    get_open_port, #win32 import
     get_open_zmq_inproc_path,
     get_open_zmq_ipc_path,
     is_valid_ipv6_address,
 )
+from vllm.v1.utils import get_engine_client_zmq_addr #win32 import
 
 logger = init_logger(__name__)
 
@@ -528,14 +531,22 @@ class MessageQueue:
             # message. otherwise, we will only receive the first subscription
             # see http://api.zeromq.org/3-3:zmq-setsockopt for more details
             self.local_socket.setsockopt(XPUB_VERBOSE, True)
-            local_subscribe_addr = get_open_zmq_ipc_path()
+            if sys.platform == "win32":
+                local_subscribe_addr = get_engine_client_zmq_addr(
+                    False, os.getenv("VLLM_HOST", "127.0.0.1"), get_open_port()
+                )
+                local_notify_addr = get_engine_client_zmq_addr(
+                    False, os.getenv("VLLM_HOST", "127.0.0.1"), get_open_port()
+                )
+            else:
+                local_subscribe_addr = get_open_zmq_ipc_path()
+                # Create the notification side of the SpinCondition
+                local_notify_addr = get_open_zmq_ipc_path()
+
             logger.debug("Binding to %s", local_subscribe_addr)
             self.local_socket.bind(local_subscribe_addr)
 
             self.current_idx = 0
-
-            # Create the notification side of the SpinCondition
-            local_notify_addr = get_open_zmq_ipc_path()
             self._spin_condition = SpinCondition(
                 is_reader=False, context=context, notify_address=local_notify_addr
             )

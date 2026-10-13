@@ -18,6 +18,13 @@ from vllm.v1.kv_offload.cpu.host_register import host_unregister
 
 logger = init_logger(__name__)
 
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    import _winapi
+
+# Win32 error raised when a pagefile-backed section exceeds the commit limit.
+_ERROR_COMMITMENT_LIMIT = 1455
+
 # MADV_POPULATE_WRITE was added in Linux 5.14 (value 23).
 _MADV_POPULATE_WRITE = getattr(mmap, "MADV_POPULATE_WRITE", 23)
 
@@ -39,6 +46,47 @@ def _wait_for_file_size(fd: int, expected_size: int, timeout: float = 30.0) -> N
         time.sleep(0.005)
 
 
+def _win_open_section(name: str, size: int) -> tuple[mmap.mmap, bool]:
+    """Create or open the named, pagefile-backed section ``name`` and map it.
+
+    Windows equivalent of the /dev/shm file: CreateFileMapping on
+    INVALID_HANDLE_VALUE gives RAM-backed shared memory that any process in
+    the session can open by name.  ERROR_ALREADY_EXISTS plays the role of
+    O_EXCL for choosing a single creator.  The kernel frees the section when
+    the last handle or view is closed, however the processes exit, so there
+    is nothing to unlink.
+
+    Returns (mapping, created).
+    """
+    try:
+        handle = _winapi.CreateFileMapping(
+            _winapi.INVALID_HANDLE_VALUE,
+            _winapi.NULL,
+            _winapi.PAGE_READWRITE,
+            (size >> 32) & 0xFFFFFFFF,
+            size & 0xFFFFFFFF,
+            name,
+        )
+    except OSError as e:
+        if getattr(e, "winerror", None) == _ERROR_COMMITMENT_LIMIT:
+            raise RuntimeError(
+                f"Cannot reserve {size / 1e9:.2f} GB for the CPU KV offload "
+                "shared region: the Windows commit limit (RAM + page file) "
+                "is too low. Reduce the CPU offloading size or enlarge the "
+                "page file."
+            ) from e
+        raise
+    try:
+        created = _winapi.GetLastError() != _winapi.ERROR_ALREADY_EXISTS
+        # mmap opens the same named section (keeping its own handle) and
+        # maps a view of `size` bytes; this fails if an existing section is
+        # smaller than expected.
+        mapping = mmap.mmap(-1, size, tagname=name, access=mmap.ACCESS_WRITE)
+    finally:
+        _winapi.CloseHandle(handle)
+    return mapping, created
+
+
 def _madvise_populate_write(mmap_obj: mmap.mmap, offset: int, length: int) -> None:
     mmap_obj.madvise(_MADV_POPULATE_WRITE, offset, length)
 
@@ -55,6 +103,10 @@ def _get_populate_write_fn(
     mmap_obj: mmap.mmap,
 ) -> Callable[[mmap.mmap, int, int], None]:
     """Select the pre-faulting method once for this mmap."""
+    if not hasattr(mmap_obj, "madvise"):
+        # Windows mmap has no madvise; touching each page is the only option.
+        logger.debug("mmap.madvise unavailable; pre-faulting with per-page writes.")
+        return _fallback_populate_write
     try:
         _madvise_populate_write(mmap_obj, 0, mmap.PAGESIZE)
     except OSError as e:
@@ -82,6 +134,12 @@ class SharedOffloadRegion:
 
     Creator-only population pre-faults the entire region before the barrier
     and requires that barrier to keep joiners from using unpopulated pages.
+
+    On Windows there is no /dev/shm: the region is a pagefile-backed named
+    section (vllm_offload_{engine_id}) instead of a file, chosen and mapped
+    by _win_open_section.  Section names cannot be unlinked; the kernel
+    frees the section once every worker has closed it, so the unlink steps
+    below are no-ops there.
     """
 
     BLOCK_SIZE_ALIGNMENT: int = mmap.PAGESIZE
@@ -107,7 +165,13 @@ class SharedOffloadRegion:
         self._row_stride = kv_bytes_per_chunk
         self.total_size_bytes = self.num_chunks * self._row_stride
 
-        self.mmap_path = f"/dev/shm/vllm_offload_{engine_id}.mmap"
+        if IS_WINDOWS:
+            # Name of the pagefile-backed section; there is no path to unlink.
+            self.mmap_path = f"vllm_offload_{engine_id}"
+        else:
+            self.mmap_path = f"/dev/shm/vllm_offload_{engine_id}.mmap"
+        self.fd: int | None = None
+        self.mmap_obj: mmap.mmap | None = None
         self._creator = False  # set True only if this worker creates the file
         self.rank = rank
         if rank is not None:
@@ -116,54 +180,22 @@ class SharedOffloadRegion:
             # exclusive upper bound for this worker's area within each row
             self._worker_area_end = (rank + 1) * cpu_page_size
         try:
-            try:
-                self.fd: int | None = os.open(
-                    self.mmap_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
-                )
-            except FileExistsError:
-                # Joiner path — another worker won O_EXCL. Reopen and wait
-                # for the file to reach expected size.
-                self.fd = os.open(self.mmap_path, os.O_RDWR)
-                _wait_for_file_size(self.fd, self.total_size_bytes)
-                logger.info("Opened existing mmap file %s", self.mmap_path)
+            if IS_WINDOWS:
+                self._open_windows_section(creator_memory_check)
             else:
-                # Creator path. We won O_EXCL, so we own the file: any
-                # failure here must clean up so concurrent joiners don't
-                # land on a 0-byte stub and spin in _wait_for_file_size
-                # for the full 30 s timeout.
-                self._creator = True
-                if creator_memory_check is not None:
-                    creator_memory_check(self.total_size_bytes)
-                check_shm_free_space(
-                    self.total_size_bytes,
-                    allocation_name="CPU KV offload shared region in /dev/shm",
-                )
-                os.ftruncate(self.fd, self.total_size_bytes)
-                logger.info(
-                    "Created mmap file %s (%.2f GB)",
-                    self.mmap_path,
-                    self.total_size_bytes / 1e9,
-                )
-
-            self.mmap_obj: mmap.mmap | None = mmap.mmap(
-                self.fd,
-                self.total_size_bytes,
-                flags=mmap.MAP_SHARED,
-                prot=mmap.PROT_READ | mmap.PROT_WRITE,
-            )
+                self._open_posix_file(creator_memory_check)
 
             if populate_only_on_creator and self._creator:
                 populate_write_fn = _get_populate_write_fn(self.mmap_obj)
                 populate_write_fn(self.mmap_obj, 0, self.total_size_bytes)
         except Exception:
             if self._creator:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(self.mmap_path)
+                self._remove_name()
                 self._creator = False
-            if hasattr(self, "mmap_obj") and self.mmap_obj is not None:
+            if self.mmap_obj is not None:
                 self.mmap_obj.close()
                 self.mmap_obj = None
-            if hasattr(self, "fd") and self.fd is not None:
+            if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
             # Peers block inside the barrier until the collective times out if
@@ -188,18 +220,17 @@ class SharedOffloadRegion:
                 barrier()
             except Exception:
                 if self._creator:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.unlink(self.mmap_path)
+                    self._remove_name()
                     self._creator = False
                 self.mmap_obj.close()
-                os.close(self.fd)
                 self.mmap_obj = None
-                self.fd = None
+                if self.fd is not None:
+                    os.close(self.fd)
+                    self.fd = None
                 raise
             if self._creator:
-                os.unlink(self.mmap_path)
+                self._remove_name()
                 self._creator = False
-                logger.info("Unlinked mmap file %s", self.mmap_path)
 
         self._base = torch.frombuffer(memoryview(self.mmap_obj), dtype=torch.int8)
         self._views: list[torch.Tensor] = []
@@ -235,6 +266,80 @@ class SharedOffloadRegion:
             logger.debug(
                 "MADV_POPULATE_WRITE entire region: %.3f s", time.perf_counter() - _t0
             )
+
+    def _open_posix_file(
+        self, creator_memory_check: Callable[[int], None] | None
+    ) -> None:
+        """Create or join /dev/shm/vllm_offload_*.mmap and mmap it."""
+        try:
+            self.fd = os.open(
+                self.mmap_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+            )
+        except FileExistsError:
+            # Joiner path — another worker won O_EXCL. Reopen and wait
+            # for the file to reach expected size.
+            self.fd = os.open(self.mmap_path, os.O_RDWR)
+            _wait_for_file_size(self.fd, self.total_size_bytes)
+            logger.info("Opened existing mmap file %s", self.mmap_path)
+        else:
+            # Creator path. We won O_EXCL, so we own the file: any
+            # failure here must clean up so concurrent joiners don't
+            # land on a 0-byte stub and spin in _wait_for_file_size
+            # for the full 30 s timeout.
+            self._creator = True
+            if creator_memory_check is not None:
+                creator_memory_check(self.total_size_bytes)
+            check_shm_free_space(
+                self.total_size_bytes,
+                allocation_name="CPU KV offload shared region in /dev/shm",
+            )
+            os.ftruncate(self.fd, self.total_size_bytes)
+            logger.info(
+                "Created mmap file %s (%.2f GB)",
+                self.mmap_path,
+                self.total_size_bytes / 1e9,
+            )
+
+        self.mmap_obj = mmap.mmap(
+            self.fd,
+            self.total_size_bytes,
+            flags=mmap.MAP_SHARED,
+            prot=mmap.PROT_READ | mmap.PROT_WRITE,
+        )
+
+    def _open_windows_section(
+        self, creator_memory_check: Callable[[int], None] | None
+    ) -> None:
+        """Create or join the pagefile-backed section and map it."""
+        self.mmap_obj, self._creator = _win_open_section(
+            self.mmap_path, self.total_size_bytes
+        )
+        if self._creator:
+            # /dev/shm and cgroup limits do not exist on Windows, so only the
+            # caller's memory check applies.  On failure, __init__'s handler
+            # closes the mapping, which frees the section unless a joiner
+            # already holds it; startup still fails because this worker raises.
+            if creator_memory_check is not None:
+                creator_memory_check(self.total_size_bytes)
+            logger.info(
+                "Created shared memory section %s (%.2f GB)",
+                self.mmap_path,
+                self.total_size_bytes / 1e9,
+            )
+        else:
+            logger.info("Opened existing shared memory section %s", self.mmap_path)
+
+    def _remove_name(self) -> None:
+        """Drop the region's name so the memory is freed with the last mapping.
+
+        No-op on Windows: a section has no name to unlink and the kernel
+        frees it when its last handle closes.
+        """
+        if IS_WINDOWS:
+            return
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self.mmap_path)
+            logger.info("Unlinked mmap file %s", self.mmap_path)
 
     @property
     def base_tensor(self) -> torch.Tensor:
@@ -370,8 +475,7 @@ class SharedOffloadRegion:
             self.fd = None
         if self._creator and getattr(self, "mmap_path", None):
             try:
-                os.unlink(self.mmap_path)
-                logger.info("Removed mmap file %s", self.mmap_path)
+                self._remove_name()
             except Exception:
                 logger.warning(
                     "Failed to unlink path %s", self.mmap_path, exc_info=True
