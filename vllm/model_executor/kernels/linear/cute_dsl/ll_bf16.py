@@ -23,11 +23,12 @@ def is_available() -> bool:
     try:
         import cutlass  # noqa: F401
         import cutlass.cute  # noqa: F401
+        from quack.compile_utils import make_fake_tensor  # noqa: F401
 
         _cutedsl_available = True
     except ImportError:
         _cutedsl_available = False
-        logger.info("cuteDSL (CUTLASS Python) not available, ll_bf16_gemm disabled")
+        logger.info("cuteDSL router dependencies unavailable, ll_bf16_gemm disabled")
     return _cutedsl_available
 
 
