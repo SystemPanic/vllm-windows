@@ -44,10 +44,18 @@ subprocess.check_call(
 shim = _pkg / "_C.py"
 shutil.copy2(shim, out / shim.name)
 
-so = _pkg / "_C_extension.abi3.so"
-if not so.is_file():
-    sys.exit(f"DeepGEMM build did not produce {so}")
-for stale in out.glob("_C_extension*.so"):
-    stale.unlink()
-shutil.copy2(so, out / so.name)
-print(f"[build_deepgemm_C] installed {so.name} -> {out}", flush=True)
+# setuptools names limited-API extensions differently per platform:
+#   Linux:   _C_extension.abi3.so
+#   Windows: _C_extension.pyd   (no abi tag in the filename)
+if sys.platform == "win32":
+    ext = _pkg / "_C_extension.pyd"
+else:
+    ext = _pkg / "_C_extension.abi3.so"
+if not ext.is_file():
+    sys.exit(f"DeepGEMM build did not produce {ext}")
+
+for pattern in ("_C_extension*.so", "_C_extension*.pyd"):
+    for stale in out.glob(pattern):
+        stale.unlink()
+shutil.copy2(ext, out / ext.name)
+print(f"[build_deepgemm_C] installed {ext.name} -> {out}", flush=True)
