@@ -426,7 +426,13 @@ def flashinfer_autotune(runner: "GPUModelRunner", *, skip_attn: bool = False) ->
     has a matching file and successfully loads it.
 
     """
-    from flashinfer.autotuner import AutoTuner, set_autotune_process_group
+    # TODO: Remove win_fix_enable_set_autotune_process_group when https://github.com/NVIDIA/cutlass/issues/3790 is resolved
+    win_fix_enable_set_autotune_process_group = True
+    try:
+        from flashinfer.autotuner import AutoTuner, set_autotune_process_group
+    except:
+        from flashinfer.autotuner import AutoTuner
+        win_fix_enable_set_autotune_process_group = False
 
     import vllm.utils.flashinfer as fi_utils
     from vllm.distributed.parallel_state import (
@@ -474,9 +480,9 @@ def flashinfer_autotune(runner: "GPUModelRunner", *, skip_attn: bool = False) ->
             loaded = all(loaded_by_rank)
         if not loaded:
             tuner.clear_cache()
-
-    group = tune_group.cpu_group if tune_group.world_size > 1 else None
-    set_autotune_process_group(group)
+    if win_fix_enable_set_autotune_process_group:
+        group = tune_group.cpu_group if tune_group.world_size > 1 else None
+        set_autotune_process_group(group)
     try:
         with (
             torch.inference_mode(),
@@ -494,7 +500,8 @@ def flashinfer_autotune(runner: "GPUModelRunner", *, skip_attn: bool = False) ->
             replayssm_autotune_warmup(runner)
             _autotune_kimi_k3_kda_qkvg(runner.get_model())
     finally:
-        set_autotune_process_group(None)
+        if win_fix_enable_set_autotune_process_group:
+            set_autotune_process_group(None)
 
     if world.world_size > 1:
         world.barrier()

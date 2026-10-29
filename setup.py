@@ -6,6 +6,7 @@ import importlib.util
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -145,7 +146,6 @@ def is_freethreaded():
 
 
 def should_bundle_tcmalloc() -> bool:
-    import platform
 
     return (
         VLLM_TARGET_DEVICE == "cpu"
@@ -313,9 +313,11 @@ class cmake_build_ext(build_ext):
 
         if VLLM_TARGET_DEVICE == 'cuda':
             if IS_WINDOWS:
+                _cuda_lib_arch = ("arm64" if platform.machine().lower() in ("arm64", "aarch64")
+                                  else "x64")
                 cmake_args += [
                     f'-Dnvtx3_dir={CUDA_HOME}\\include',
-                    f'-DCUDA_cublas_LIBRARY={CUDA_HOME}\\lib\\x64\\cublas.lib'
+                    f'-DCUDA_cublas_LIBRARY={CUDA_HOME}\\lib\\{_cuda_lib_arch}\\cublas.lib'
                 ]
 
         # Override the base directory for FetchContent downloads to $ROOT/.deps
@@ -348,6 +350,8 @@ class cmake_build_ext(build_ext):
             if IS_WINDOWS:
                 _cuda_home = CUDA_HOME.replace("\\", "/")
                 cmake_args += [f"-DCMAKE_CUDA_COMPILER={_cuda_home}/bin/nvcc.exe"]
+                if platform.machine().lower() in ("arm64", "aarch64"):
+                    cmake_args += [f"-C {os.path.dirname(__file__)}/cmake/arm64-cuda.cmake"]
             else:
                 cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
         elif _is_hip() and ROCM_HOME is not None:
@@ -815,7 +819,6 @@ class precompiled_wheel_utils:
     @staticmethod
     def fetch_wheel_from_pypi_index(index_url: str, package: str = "vllm") -> str:
         """Fetch the latest wheel URL from a PyPI-style simple index."""
-        import platform
         from html.parser import HTMLParser
         from urllib.parse import urljoin
         from urllib.request import urlopen
@@ -857,8 +860,6 @@ class precompiled_wheel_utils:
         if local_wheel is not None:
             print(f"Found local ROCm wheel: {local_wheel}")
             return local_wheel, None
-
-        import platform
 
         arch = platform.machine()
         commit = os.getenv("VLLM_PRECOMPILED_WHEEL_COMMIT", "").lower()
@@ -1027,8 +1028,6 @@ class precompiled_wheel_utils:
             # ROCm: resolve wheels from wheels.vllm.ai with environment-matched variant
             if precompiled_wheel_utils.is_rocm_system():
                 return precompiled_wheel_utils.determine_wheel_url_rocm()
-
-            import platform
 
             arch = platform.machine()
             # try to fetch the wheel metadata from the nightly wheel repo,
@@ -1609,7 +1608,6 @@ if _is_cuda():
     ext_modules.append(CMakeExtension(name="vllm.tml_fa4", optional=True))
 
 if _is_cpu():
-    import platform
 
     if platform.machine() in ("x86_64", "AMD64"):
         ext_modules.append(CMakeExtension(name="vllm._C"))

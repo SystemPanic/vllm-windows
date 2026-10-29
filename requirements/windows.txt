@@ -1,4 +1,4 @@
 winloop
-triton-windows==3.6.0.post26
+triton-windows==3.8.0.post29
 xformers==0.0.35
 portalocker

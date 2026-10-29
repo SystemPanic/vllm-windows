@@ -6,7 +6,8 @@ setuptools>=78.1.1,<81.0.0
 setuptools-scm>=8
 setuptools-rust>=1.9.0
 torch==2.13.0; sys_platform != "win32"
-torch==2.11.0+cu130; sys_platform == "win32"
+torch==2.11.0+cu130; sys_platform == "win32" and platform_machine != 'ARM64'
+torch==2.14.0+cu134; sys_platform == "win32" and platform_machine == 'ARM64'
 wheel
 jinja2>=3.1.6
 regex

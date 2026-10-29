@@ -6,7 +6,10 @@
 
 inline constexpr uint32_t next_pow_2(uint32_t const num) {
   if (num <= 1) return num;
-#ifdef _WIN32
+#if defined(_WIN32) && defined(_M_ARM64)
+  // __lzcnt is x86/x64-only; ARM64 MSVC exposes CLZ as _CountLeadingZeros
+  return 1 << (CHAR_BIT * sizeof(num) - _CountLeadingZeros(num - 1));
+#elif defined(_WIN32)
   return 1 << (CHAR_BIT * sizeof(num) - __lzcnt(num - 1));
 #else
   return 1 << (CHAR_BIT * sizeof(num) - __builtin_clz(num - 1));

@@ -30,7 +30,7 @@ else()
   # Keep in sync with tools/install_deepgemm.sh
   if(WIN32)
     set(_DEEPGEMM_UPSTREAM_REPO "https://github.com/SystemPanic/DeepGEMM-windows.git")
-    set(_DEEPGEMM_UPSTREAM_TAG "1eeab30ec29cd9e782c9c1fba194a36591225024")
+    set(_DEEPGEMM_UPSTREAM_TAG "4be132f0c6304708a26c184fb7e5ddc0eba89cfd")
   else()
     set(_DEEPGEMM_UPSTREAM_REPO "https://github.com/vllm-project/DeepGEMM.git")
     # Pinned to the fork's dev branch: upstream 2.8.0 plus the SM120

@@ -853,7 +853,7 @@ namespace detail {
 
 static constexpr int BlockDim = 256;
 static constexpr uint32_t FullWarpMask = 0xffffffffU;
-static constexpr float InvalidScore = -INFINITY;
+static constexpr float InvalidScore = -std::numeric_limits<float>::infinity();
 
 // TopK-only tuning: use wider workers and keep these tiers on the block path.
 template <int MaxNumExperts, int MaxNumTopExperts>
