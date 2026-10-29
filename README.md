@@ -44,7 +44,7 @@ vLLM for Windows build & kernels. This repository will be updated when new versi
 
 #### Installing an existing release wheel:
 
-##### For RTX Spark install instructions, go [here](https://github.com/SystemPanic/vllm-windows/README_SPARK.md) instead.
+##### For RTX Spark install instructions, go [here](https://github.com/SystemPanic/vllm-windows/blob/vllm-for-windows/README_SPARK.md) instead.
 
 1. Ensure that you have the correct Python, Torch and CUDA version of the wheel. The Python, Torch and CUDA version of the wheel is specified in the release version.
 2. Download the wheel from the release version of your preference (latest wheel [here](https://github.com/SystemPanic/vllm-windows/releases/latest)).
@@ -52,7 +52,7 @@ vLLM for Windows build & kernels. This repository will be updated when new versi
 
 #### Building from source:
 
-##### For RTX Spark build instructions, go [here](https://github.com/SystemPanic/vllm-windows/README_SPARK.md) instead.
+##### For RTX Spark build instructions, go [here](https://github.com/SystemPanic/vllm-windows/blob/vllm-for-windows/README_SPARK.md) instead.
 
 A Visual Studio 2019 or newer is required to launch the compiler x64 environment. The installation path is referred in the instructions as VISUAL_STUDIO_INSTALL_PATH.
 
