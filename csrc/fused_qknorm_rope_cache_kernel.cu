@@ -311,9 +311,19 @@ void launch_qknorm_rope_cache(
   const int total_heads = num_q_heads + 2 * num_kv_heads;
   const int64_t total_work = qkv.size(0) * total_heads;
   const int block_size = static_cast<int>(k_cache.size(1));
+  
+#if defined(_WIN32) && defined(_M_ARM64)
+  // __lzcnt is x86/x64-only; ARM64 MSVC exposes CLZ as _CountLeadingZeros
+  const int block_size_ctz = _CountLeadingZeros(static_cast<unsigned int>(block_size));
+#elif defined(_WIN32)
+  const int block_size_ctz = __lzcnt(static_cast<unsigned int>(block_size));
+#else
+  const int block_size_ctz = __builtin_clz(static_cast<unsigned int>(block_size));
+#endif
+
   const int block_size_shift =
       (block_size & (block_size - 1)) == 0
-          ? __builtin_ctz(static_cast<unsigned int>(block_size))
+          ? block_size_ctz
           : -1;
 
 #define LAUNCH_QKNORM_ROPE_CACHE(HEAD_DIM, WIDE_192_ROTARY)                    \

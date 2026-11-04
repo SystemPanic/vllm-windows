@@ -683,12 +683,12 @@ void topkGatingSoftplusSqrtLauncherHelper(
   const int num_warps = (num_rows + ROWS_PER_WARP - 1) / ROWS_PER_WARP;
   const int num_blocks = (num_warps + WARPS_PER_TB - 1) / WARPS_PER_TB;
   dim3 block_dim(WARP_SIZE_PARAM, WARPS_PER_TB);
+#ifndef USE_ROCM
   DISPATCH_HASH(use_hash, USE_HASH, {
     auto* kernel =
         &topkGatingSoftplusSqrt<VPT, EXPERTS, WARPS_PER_TB, BYTES_PER_LDG,
                                 WARP_SIZE_PARAM, USE_HASH, IndType, HashIndType,
                                 InputType>;
-#ifndef USE_ROCM
     cudaLaunchConfig_t config = {};
     config.gridDim = num_blocks;
     config.blockDim = block_dim;
@@ -704,13 +704,19 @@ void topkGatingSoftplusSqrtLauncherHelper(
                        renormalize, routed_scaling_factor, correction_bias,
                        input_ids, tid2eid, is_padding, bias_vl,
                        image_sentinel_lo);
+  })
 #else
+  DISPATCH_HASH(use_hash, USE_HASH, {
+    auto* kernel =
+        &topkGatingSoftplusSqrt<VPT, EXPERTS, WARPS_PER_TB, BYTES_PER_LDG,
+                                WARP_SIZE_PARAM, USE_HASH, IndType, HashIndType,
+                                InputType>;
     kernel<<<num_blocks, block_dim, 0, stream>>>(
         input, finished, output, num_rows, indices, source_row, k, start_expert,
         end_expert, renormalize, routed_scaling_factor, correction_bias,
         input_ids, tid2eid, is_padding, bias_vl, image_sentinel_lo);
-#endif
   })
+#endif
 }
 
 // Launches the kernel for one explicit wavefront size. WARP_SIZE (see

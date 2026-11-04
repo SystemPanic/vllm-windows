@@ -54,7 +54,43 @@ enum ShutdownReason {
     EngineExited(ExitStatus),
 }
 
-/// Cancellation token tripped by Ctrl-C or SIGTERM.
+/// Name of the platform's "please terminate" signal, for logs.
+#[cfg(unix)]
+const TERMINATE_SIGNAL_NAME: &str = "SIGTERM";
+#[cfg(windows)]
+const TERMINATE_SIGNAL_NAME: &str = "Ctrl-Break/console close";
+
+/// Wait for the platform's "please terminate" request.
+///
+/// Unix: SIGTERM. Windows has no SIGTERM delivery between processes; the
+/// equivalents are Ctrl-Break (what `GenerateConsoleCtrlEvent` sends to a
+/// process group, as `vllm-managed-engine` does for its child) and the
+/// console window being closed. Note that a parent calling
+/// `TerminateProcess` (Python's `Popen.terminate()` on Windows) kills the
+/// process outright and is never observable here.
+async fn terminate_requested() {
+    #[cfg(unix)]
+    {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM signal handler")
+            .recv()
+            .await;
+    }
+
+    #[cfg(windows)]
+    {
+        let mut ctrl_break = tokio::signal::windows::ctrl_break()
+            .expect("failed to install Ctrl-Break signal handler");
+        let mut ctrl_close = tokio::signal::windows::ctrl_close()
+            .expect("failed to install console-close signal handler");
+        tokio::select! {
+            _ = ctrl_break.recv() => {}
+            _ = ctrl_close.recv() => {}
+        }
+    }
+}
+
+/// Cancellation token tripped by Ctrl-C or the platform terminate signal.
 fn shutdown_signal() -> CancellationToken {
     let token = CancellationToken::new();
     let shutdown = token.clone();
@@ -64,16 +100,11 @@ fn shutdown_signal() -> CancellationToken {
             tokio::signal::ctrl_c().await.expect("failed to install Ctrl-C signal handler");
         };
 
-        let sigterm = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM signal handler")
-                .recv()
-                .await;
-        };
-
         tokio::select! {
             _ = ctrl_c => info!("received shutdown signal (Ctrl-C), shutting down..."),
-            _ = sigterm => info!("received shutdown signal (SIGTERM), shutting down..."),
+            _ = terminate_requested() => info!(
+                "received shutdown signal ({TERMINATE_SIGNAL_NAME}), shutting down..."
+            ),
         }
 
         shutdown.cancel();

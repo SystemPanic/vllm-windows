@@ -24,7 +24,10 @@ def _register_signal_handlers():
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTSTP, signal_handler)
+    if sys.platform == "win32":
+        signal.signal(signal.SIGTERM, signal_handler)
+    else:
+        signal.signal(signal.SIGTSTP, signal_handler)
 
 
 def _interactive_cli(args: argparse.Namespace) -> tuple[str, OpenAI]:

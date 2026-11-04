@@ -23,7 +23,16 @@ from typing import (
 )
 
 import torch
-import uvloop
+import os
+if os.name == "nt":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 from torch.autograd.profiler import record_function
 
 import vllm.envs as envs
@@ -298,15 +307,35 @@ class RustFrontendProcessManager:
         stats_update_address: str | None = None,
         grpc_sock: Any | None = None,
     ):
-        import os
         import subprocess
+
+        is_windows = os.name == "nt"
+        if is_windows:
+            # On Windows the Rust side adopts SOCKET handles and only accepts
+            # TCP listeners (no ipc:// / AF_UNIX); fail early with a clear
+            # message instead of an opaque error from the child process.
+            import socket as _socket
+
+            for name, s in (
+                ("input", input_listener.socket),
+                ("output", output_listener.socket),
+            ):
+                if s.family not in (_socket.AF_INET, _socket.AF_INET6):
+                    raise RuntimeError(
+                        f"Rust frontend on Windows needs a TCP {name} ZMQ "
+                        f"listener, got family {s.family!r}. Use tcp:// "
+                        "engine addresses instead of ipc://."
+                    )
 
         listen_fd = sock.fileno()
         input_fd = input_listener.socket.fileno()
         output_fd = output_listener.socket.fileno()
         inherited_fds = [listen_fd, input_fd, output_fd]
-        for fd in inherited_fds:
-            os.set_inheritable(fd, True)
+        # socket.set_inheritable works on both platforms: it sets the fd flag
+        # on Unix and HANDLE_FLAG_INHERIT on Windows SOCKET handles.
+        # (os.set_inheritable only accepts C runtime fds on Windows.)
+        for s in (sock, input_listener.socket, output_listener.socket):
+            s.set_inheritable(True)
 
         cmd = [
             binary_path,
@@ -326,7 +355,7 @@ class RustFrontendProcessManager:
         ]
         if grpc_sock is not None:
             grpc_fd = grpc_sock.fileno()
-            os.set_inheritable(grpc_fd, True)
+            grpc_sock.set_inheritable(True)
             cmd.extend(["--grpc-listen-fd", str(grpc_fd)])
             inherited_fds.append(grpc_fd)
         if stats_update_address is not None:
@@ -372,7 +401,24 @@ class RustFrontendProcessManager:
         logger.info("Launching Rust frontend: %s", " ".join(cmd[:-1] + [redacted_json]))
         self._listeners = [input_listener, output_listener]
         try:
-            self._proc = subprocess.Popen(cmd, pass_fds=inherited_fds)
+            if is_windows:
+                # pass_fds is POSIX-only. On Windows, restrict inheritance to
+                # exactly these socket handles via PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+                # (requires close_fds=True, the default). The handle values
+                # passed on the command line stay valid in the child.
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.lpAttributeList = {"handle_list": inherited_fds}
+                self._proc = subprocess.Popen(
+                    cmd,
+                    startupinfo=startupinfo,
+                    close_fds=True,
+                    # Own console process group, so shutdown can send it
+                    # CTRL_BREAK (the Windows stand-in for SIGTERM) without
+                    # also hitting this process.
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                self._proc = subprocess.Popen(cmd, pass_fds=inherited_fds)
         except BaseException:
             for listener in self._listeners:
                 listener.cleanup()
@@ -440,6 +486,18 @@ class _SubprocessWrapper:
         return self._proc.poll() is None
 
     def terminate(self):
+        if os.name == "nt":
+            # Popen.terminate() is TerminateProcess on Windows: an instant
+            # kill with no chance to drain requests. Ask nicely first with
+            # CTRL_BREAK (handled by vllm-rs as its SIGTERM); callers fall
+            # back to kill_process_tree after their timeout.
+            import signal
+
+            try:
+                os.kill(self._proc.pid, signal.CTRL_BREAK_EVENT)
+                return
+            except OSError:
+                pass
         self._proc.terminate()
 
     def join(self, timeout=None):
@@ -524,7 +582,7 @@ def run_api_server_worker_proc(
     set_process_title("APIServer", str(server_index))
     decorate_logs()
 
-    uvloop.run(
+    uvloop_impl.run(
         run_server_worker(listen_address, sock, args, client_config, **uvicorn_kwargs)
     )
 

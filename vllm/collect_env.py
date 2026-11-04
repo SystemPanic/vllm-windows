@@ -301,7 +301,7 @@ def get_xpu_runtime_version():
 
 
 def get_pkg_version(run_lambda, pkg):
-    assert get_platform() == "linux"
+    assert get_platform() == "linux" or get_platform() == "win32"
 
     if pkg in ["vllm_xpu_kernels", "oneccl"]:
         rc, out, _ = run_lambda(f"pip show {pkg}")
