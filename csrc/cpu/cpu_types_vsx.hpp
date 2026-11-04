@@ -1117,7 +1117,11 @@ inline BF16Vec16::BF16Vec16(const FP32Vec16& v) {
 }
 
 inline void prefetch(const void* addr) {
+#ifdef _WIN32
+  __asm("dcbt 0, %0" : : "r"(addr) : "memory");
+#else
   __asm__ __volatile__("dcbt 0, %0" : : "r"(addr) : "memory");
+#endif
 }
 
 static void interleave_save(const BF16Vec16& vec0, const BF16Vec16& vec1,

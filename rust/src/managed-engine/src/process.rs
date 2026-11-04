@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+#[cfg(unix)]
 use std::io;
 use std::net::TcpListener;
 use std::process::{Command as StdCommand, ExitStatus, Stdio};
@@ -170,8 +171,75 @@ impl ManagedEngineHandle {
     }
 }
 
+/// Windows process-group helpers.
+///
+/// Windows has no `setpgid`/`kill(-pgid, sig)`. The equivalent is:
+/// - start the child with `CREATE_NEW_PROCESS_GROUP`, so it and every process it spawns share a
+///   console process group whose id is the child's pid;
+/// - "SIGTERM": `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)`, delivered to every process in
+///   that group (Python sees it as `SIGBREAK`);
+/// - "SIGKILL": `taskkill /PID <pid> /T /F`, which force-kills the whole process tree.
+#[cfg(windows)]
+mod process_group {
+    use super::*;
+
+    /// `CREATE_NEW_PROCESS_GROUP` from `winbase.h`.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    /// `CTRL_BREAK_EVENT` from `wincon.h`.
+    const CTRL_BREAK_EVENT: u32 = 1;
+    /// `taskkill` exit status when the target process does not exist.
+    const TASKKILL_NOT_FOUND: i32 = 128;
+
+    // Declared directly to avoid adding a `windows-sys` dependency for one call.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GenerateConsoleCtrlEvent(ctrl_event: u32, process_group_id: u32) -> i32;
+    }
+
+    /// Start the Python child in its own console process group so it can be
+    /// signalled and torn down as a unit. Like `setpgid` on Unix, this also
+    /// keeps a terminal Ctrl+C aimed at `vllm-rs` from hitting the engine
+    /// directly; `vllm-rs` shuts the engine down itself.
+    pub fn configure(command: &mut Command) {
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
+
+    /// Ask the managed Python process group to exit (Windows "SIGTERM").
+    pub fn terminate(pid: u32) -> Result<()> {
+        // SAFETY: plain Win32 call with integer arguments.
+        let ok = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) };
+        if ok == 0 {
+            // Typically means vllm-rs has no console (e.g. launched detached).
+            // Not fatal: shutdown() falls through to kill() after its timeout.
+            tracing::warn!(
+                pid,
+                error = %std::io::Error::last_os_error(),
+                "failed to send CTRL_BREAK to managed engine; will force-kill after timeout"
+            );
+        }
+        Ok(())
+    }
+
+    /// Force-kill the managed Python process tree (Windows "SIGKILL").
+    pub fn kill(pid: u32) -> Result<()> {
+        let status = StdCommand::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("failed to run taskkill for managed engine")?;
+        // Already gone is success, matching ESRCH handling on Unix.
+        if status.success() || status.code() == Some(TASKKILL_NOT_FOUND) {
+            return Ok(());
+        }
+        anyhow::bail!("taskkill failed for managed engine pid {pid}: {status}")
+    }
+}
+
 /// Process group helper functions for managing the Python subprocess and its
 /// potential children in a platform-aware way.
+#[cfg(unix)]
 mod process_group {
     use super::*;
 

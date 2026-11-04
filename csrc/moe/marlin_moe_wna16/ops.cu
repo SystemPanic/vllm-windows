@@ -171,11 +171,10 @@ MarlinFuncPtr get_marlin_kernel(const vllm::ScalarType a_type,
                                 bool has_zp, int group_blocks, int threads,
                                 bool is_zp_float, int stages) {
   int num_bits = b_type.size_bits();
-  auto kernel = MarlinDefault;
 
 #include "kernel_selector.h"
 
-  return kernel;
+  return MarlinDefault;
 }
 
 exec_config_t determine_exec_config(

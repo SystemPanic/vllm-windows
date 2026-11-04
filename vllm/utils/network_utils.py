@@ -173,6 +173,14 @@ def get_tcp_uri(ip: str, port: int) -> str:
 
 
 def get_open_zmq_ipc_path() -> str:
+    if sys.platform == "win32":
+        # Windows has no usable ipc:// transport across the stack: Python's
+        # socket module may lack AF_UNIX, and the Rust frontend can only adopt
+        # TCP listeners there. Use a loopback TCP endpoint with a concrete free
+        # port so the same string works for both bind() and connect(). The
+        # port is only reserved between this probe and the bind, so a rare
+        # collision surfaces as an "address in use" error at bind time.
+        return get_tcp_uri(get_loopback_ip(), get_open_port())
     base_rpc_path = envs.VLLM_RPC_BASE_PATH
     return f"ipc://{base_rpc_path}/{uuid4()}"
 
@@ -413,6 +421,11 @@ def make_zmq_listener(path: str, socket_type: Any) -> ZmqListener:
         family = socket.AF_INET6 if is_valid_ipv6_address(host) else socket.AF_INET
         bind_address: str | tuple[str, int] = (host, int(port))
     elif scheme == "ipc":
+        if sys.platform == "win32":
+            raise ValueError(
+                f"Cannot create an inheritable ipc:// listener on Windows "
+                f"({path}); use a tcp:// address instead"
+            )
         family = socket.AF_UNIX
         bind_address = path.removeprefix("ipc://")
         os.makedirs(os.path.dirname(bind_address), exist_ok=True)

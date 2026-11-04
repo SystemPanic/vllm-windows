@@ -22,6 +22,13 @@ from vllm.v1.kv_offload.cpu.host_register import host_unregister
 
 logger = init_logger(__name__)
 
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    import _winapi
+
+# Win32 error raised when a pagefile-backed section exceeds the commit limit.
+_ERROR_COMMITMENT_LIMIT = 1455
+
 # MADV_POPULATE_WRITE was added in Linux 5.14 (value 23).
 _MADV_POPULATE_WRITE = getattr(mmap, "MADV_POPULATE_WRITE", 23)
 _MAP_FIXED = 0x10
@@ -45,6 +52,47 @@ def _wait_for_file_size(fd: int, expected_size: int, timeout: float = 30.0) -> N
                 f"Timed out waiting for mmap file to reach {expected_size} bytes"
             )
         time.sleep(0.005)
+
+
+def _win_open_section(name: str, size: int) -> tuple[mmap.mmap, bool]:
+    """Create or open the named, pagefile-backed section ``name`` and map it.
+
+    Windows equivalent of the /dev/shm file: CreateFileMapping on
+    INVALID_HANDLE_VALUE gives RAM-backed shared memory that any process in
+    the session can open by name.  ERROR_ALREADY_EXISTS plays the role of
+    O_EXCL for choosing a single creator.  The kernel frees the section when
+    the last handle or view is closed, however the processes exit, so there
+    is nothing to unlink.
+
+    Returns (mapping, created).
+    """
+    try:
+        handle = _winapi.CreateFileMapping(
+            _winapi.INVALID_HANDLE_VALUE,
+            _winapi.NULL,
+            _winapi.PAGE_READWRITE,
+            (size >> 32) & 0xFFFFFFFF,
+            size & 0xFFFFFFFF,
+            name,
+        )
+    except OSError as e:
+        if getattr(e, "winerror", None) == _ERROR_COMMITMENT_LIMIT:
+            raise RuntimeError(
+                f"Cannot reserve {size / 1e9:.2f} GB for the CPU KV offload "
+                "shared region: the Windows commit limit (RAM + page file) "
+                "is too low. Reduce the CPU offloading size or enlarge the "
+                "page file."
+            ) from e
+        raise
+    try:
+        created = _winapi.GetLastError() != _winapi.ERROR_ALREADY_EXISTS
+        # mmap opens the same named section (keeping its own handle) and
+        # maps a view of `size` bytes; this fails if an existing section is
+        # smaller than expected.
+        mapping = mmap.mmap(-1, size, tagname=name, access=mmap.ACCESS_WRITE)
+    finally:
+        _winapi.CloseHandle(handle)
+    return mapping, created
 
 
 @functools.cache
@@ -71,6 +119,10 @@ def _get_populate_write_fn(
     mmap_obj: mmap.mmap,
 ) -> Callable[[mmap.mmap, int, int], None]:
     """Select the pre-faulting method once for this mmap."""
+    if not hasattr(mmap_obj, "madvise"):
+        # Windows mmap has no madvise; touching each page is the only option.
+        logger.debug("mmap.madvise unavailable; pre-faulting with per-page writes.")
+        return _fallback_populate_write
     try:
         _madvise_populate_write(mmap_obj, 0, mmap.PAGESIZE)
     except OSError as e:
@@ -100,6 +152,12 @@ class SharedOffloadRegion:
     share, for layouts where every worker maps the same bytes. The barrier
     also waits for all shards to finish pre-faulting before returning.
     ``num_segments`` splits backing files beneath the contiguous mapping.
+
+    On Windows there is no /dev/shm: the region is a single pagefile-backed
+    named section (vllm_offload_{engine_id}) instead of a file, chosen and
+    mapped by _win_open_section, and ``num_segments`` is ignored.  Section
+    names cannot be unlinked; the kernel frees the section once every worker
+    has closed it, so _unlink is a no-op there.
     """
 
     BLOCK_SIZE_ALIGNMENT: int = mmap.PAGESIZE
@@ -125,7 +183,15 @@ class SharedOffloadRegion:
         self.total_size_bytes = self.num_chunks * self._row_stride
         self.cpu_page_size = cpu_page_size
 
-        self.mmap_path = f"/dev/shm/vllm_offload_{engine_id}.mmap"
+        if IS_WINDOWS:
+            # Name of the pagefile-backed section; there is no path to unlink.
+            self.mmap_path = f"vllm_offload_{engine_id}"
+            # Segments work around per-file page-cache serialization in
+            # /dev/shm and are stitched together with MAP_FIXED; neither
+            # applies to a section, so always use one.
+            num_segments = 1
+        else:
+            self.mmap_path = f"/dev/shm/vllm_offload_{engine_id}.mmap"
         num_segments = min(num_segments, self.total_size_bytes // _MIN_SEGMENT_BYTES)
         rows = max(1, cdiv(num_chunks, max(1, num_segments)))
         # (path, offset, length) per file.
@@ -137,6 +203,8 @@ class SharedOffloadRegion:
             )
             for i, row in enumerate(range(0, max(num_chunks, 1), rows))
         ]
+        self.fd: int | None = None
+        self.mmap_obj: mmap.mmap | None = None
         self._creator = False  # set True only if this worker creates the file
         self.rank = rank
         if rank is not None:
@@ -146,56 +214,17 @@ class SharedOffloadRegion:
             self._worker_area_end = (rank + 1) * cpu_page_size
         barriers_remaining = 2 if populate_shard is not None else 1
         try:
-            try:
-                self.fd: int | None = os.open(
-                    self.mmap_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
-                )
-            except FileExistsError:
-                # Joiner path — another worker won O_EXCL. Reopen and wait
-                # for the file to reach expected size.
-                self.fd = os.open(self.mmap_path, os.O_RDWR)
-                _wait_for_file_size(self.fd, self._segments[0][2])
-                logger.info("Opened existing mmap file %s", self.mmap_path)
+            if IS_WINDOWS:
+                self._open_windows_section(creator_memory_check)
             else:
-                # Creator path. We won O_EXCL, so we own the file: any
-                # failure here must clean up so concurrent joiners don't
-                # land on a 0-byte stub and spin in _wait_for_file_size
-                # for the full 30 s timeout.
-                self._creator = True
-                if creator_memory_check is not None:
-                    creator_memory_check(self.total_size_bytes)
-                check_shm_free_space(
-                    self.total_size_bytes,
-                    allocation_name="CPU KV offload shared region in /dev/shm",
-                )
-                for path, _, length in self._segments[1:]:
-                    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
-                    os.ftruncate(fd, length)
-                    os.close(fd)
-                # Joiners wait for the first file, so size it last.
-                os.ftruncate(self.fd, self._segments[0][2])
-                logger.info(
-                    "Created mmap file %s (%.2f GB)",
-                    self.mmap_path,
-                    self.total_size_bytes / 1e9,
-                )
+                self._open_posix_file(creator_memory_check)
 
-            single = len(self._segments) == 1
-            self.mmap_obj: mmap.mmap | None = mmap.mmap(
-                self.fd if single else -1,
-                self.total_size_bytes,
-                flags=mmap.MAP_SHARED if single else mmap.MAP_PRIVATE,
-                prot=mmap.PROT_READ | mmap.PROT_WRITE,
-            )
-            if not single:
-                self._map_segments()
             if barrier is not None:
                 barriers_remaining -= 1
                 barrier()
                 if self._creator:
                     self._unlink()
                     self._creator = False
-                    logger.info("Unlinked mmap file %s", self.mmap_path)
             if populate_shard is not None:
                 populate_write_fn = _get_populate_write_fn(self.mmap_obj)
                 index, count = populate_shard
@@ -211,12 +240,12 @@ class SharedOffloadRegion:
             if self._creator:
                 self._unlink()
                 self._creator = False
-            if hasattr(self, "mmap_obj") and self.mmap_obj is not None:
+            if self.mmap_obj is not None:
                 # The prefault traceback may retain an exported buffer.
                 with contextlib.suppress(BufferError):
                     self.mmap_obj.close()
                 self.mmap_obj = None
-            if hasattr(self, "fd") and self.fd is not None:
+            if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
             # Join remaining barriers so peers do not wait until the collective
@@ -260,6 +289,76 @@ class SharedOffloadRegion:
                 "MADV_POPULATE_WRITE entire region: %.3f s", time.perf_counter() - _t0
             )
 
+    def _open_posix_file(
+        self, creator_memory_check: Callable[[int], None] | None
+    ) -> None:
+        """Create or join /dev/shm/vllm_offload_*.mmap (and segments), mmap it."""
+        try:
+            self.fd = os.open(
+                self.mmap_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
+            )
+        except FileExistsError:
+            # Joiner path — another worker won O_EXCL. Reopen and wait
+            # for the file to reach expected size.
+            self.fd = os.open(self.mmap_path, os.O_RDWR)
+            _wait_for_file_size(self.fd, self._segments[0][2])
+            logger.info("Opened existing mmap file %s", self.mmap_path)
+        else:
+            # Creator path. We won O_EXCL, so we own the file: any
+            # failure here must clean up so concurrent joiners don't
+            # land on a 0-byte stub and spin in _wait_for_file_size
+            # for the full 30 s timeout.
+            self._creator = True
+            if creator_memory_check is not None:
+                creator_memory_check(self.total_size_bytes)
+            check_shm_free_space(
+                self.total_size_bytes,
+                allocation_name="CPU KV offload shared region in /dev/shm",
+            )
+            for path, _, length in self._segments[1:]:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                os.ftruncate(fd, length)
+                os.close(fd)
+            # Joiners wait for the first file, so size it last.
+            os.ftruncate(self.fd, self._segments[0][2])
+            logger.info(
+                "Created mmap file %s (%.2f GB)",
+                self.mmap_path,
+                self.total_size_bytes / 1e9,
+            )
+
+        single = len(self._segments) == 1
+        self.mmap_obj = mmap.mmap(
+            self.fd if single else -1,
+            self.total_size_bytes,
+            flags=mmap.MAP_SHARED if single else mmap.MAP_PRIVATE,
+            prot=mmap.PROT_READ | mmap.PROT_WRITE,
+        )
+        if not single:
+            self._map_segments()
+
+    def _open_windows_section(
+        self, creator_memory_check: Callable[[int], None] | None
+    ) -> None:
+        """Create or join the pagefile-backed section and map it."""
+        self.mmap_obj, self._creator = _win_open_section(
+            self.mmap_path, self.total_size_bytes
+        )
+        if self._creator:
+            # /dev/shm and cgroup limits do not exist on Windows, so only the
+            # caller's memory check applies.  On failure, __init__'s handler
+            # closes the mapping, which frees the section unless a joiner
+            # already holds it; startup still fails because this worker raises.
+            if creator_memory_check is not None:
+                creator_memory_check(self.total_size_bytes)
+            logger.info(
+                "Created shared memory section %s (%.2f GB)",
+                self.mmap_path,
+                self.total_size_bytes / 1e9,
+            )
+        else:
+            logger.info("Opened existing shared memory section %s", self.mmap_path)
+
     def _map_segments(self) -> None:
         """Replace the anonymous mapping with the segment files, back to back."""
         assert self.mmap_obj is not None and self.fd is not None
@@ -280,9 +379,17 @@ class SharedOffloadRegion:
                 raise OSError(ctypes.get_errno(), f"Failed to map {path}")
 
     def _unlink(self) -> None:
+        """Drop the region's names so the memory is freed with the last mapping.
+
+        No-op on Windows: a section has no name to unlink and the kernel
+        frees it when its last handle closes.
+        """
+        if IS_WINDOWS:
+            return
         for path, _, _ in self._segments:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(path)
+                logger.info("Unlinked mmap file %s", path)
 
     def iter_worker_slot_ranges(self) -> Iterator[tuple[int, int]]:
         """Yield this worker's slots as page-aligned (offset, length) ranges."""
@@ -447,7 +554,6 @@ class SharedOffloadRegion:
         if self._creator and getattr(self, "mmap_path", None):
             try:
                 self._unlink()
-                logger.info("Removed mmap file %s", self.mmap_path)
             except Exception:
                 logger.warning(
                     "Failed to unlink path %s", self.mmap_path, exc_info=True

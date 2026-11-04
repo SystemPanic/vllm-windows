@@ -138,7 +138,7 @@ fn peer_identity(engine_id: impl Into<EngineId>) -> Result<PeerIdentity> {
 async fn wait_for_endpoint(endpoint: &str, connect_timeout: Duration) -> Result<()> {
     if let Some(socket_path) = endpoint.strip_prefix("ipc://") {
         timeout(connect_timeout, async {
-            while tokio::net::UnixStream::connect(socket_path).await.is_err() {
+            while !ipc_endpoint_ready(socket_path).await {
                 sleep(Duration::from_millis(20)).await;
             }
         })
@@ -161,6 +161,23 @@ async fn wait_for_endpoint(endpoint: &str, connect_timeout: Duration) -> Result<
     } else {
         Ok(())
     }
+}
+
+/// Check whether an `ipc://` endpoint is accepting connections.
+#[cfg(unix)]
+async fn ipc_endpoint_ready(socket_path: &str) -> bool {
+    tokio::net::UnixStream::connect(socket_path).await.is_ok()
+}
+
+/// Check whether an `ipc://` endpoint is accepting connections.
+///
+/// tokio has no `UnixStream` on Windows. AF_UNIX sockets on Windows
+/// (10 1803+) create a file at the path on bind, so its existence is used as
+/// the readiness signal; the listener calls `listen` right after `bind`.
+#[cfg(windows)]
+async fn ipc_endpoint_ready(socket_path: &str) -> bool {
+    // A single metadata syscall; std avoids depending on tokio's "fs" feature.
+    std::path::Path::new(socket_path).exists()
 }
 
 /// Encode the engine-ready response sent on input socket registration.

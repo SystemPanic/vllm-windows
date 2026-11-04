@@ -24,6 +24,7 @@ from vllm.ray.ray_env import get_env_vars_to_copy
 from vllm.utils import numa_utils
 from vllm.utils.network_utils import (
     ZmqListener,
+    get_open_port,
     get_open_zmq_ipc_path,
     get_tcp_uri,
     make_zmq_listener,
@@ -41,6 +42,9 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 STARTUP_POLL_PERIOD_MS = 10000
+# On Windows zmq.Poller can only watch sockets, so process liveness is checked
+# by hand between short polls of the handshake socket.
+WINDOWS_STARTUP_POLL_PERIOD_MS = 500
 ROCM_ENGINE_PROCESS_SHUTDOWN_TIMEOUT_S = 15.0
 
 
@@ -1151,7 +1155,7 @@ def get_engine_zmq_bind_addresses(
         client_local_only = False
 
     def _addr() -> str:
-        if client_local_only:
+        if client_local_only and os.name != "nt":
             return get_open_zmq_ipc_path()
         return get_tcp_uri(host, 0)
 
@@ -1342,7 +1346,7 @@ def launch_core_engines(
     handshake_local_only = offline_mode or local_engine_count == dp_size
 
     # NOTE(yongji): handling scaling from intra-node to inter-node
-    if parallel_config.enable_elastic_ep:
+    if parallel_config.enable_elastic_ep or os.name == "nt":
         handshake_local_only = False
 
     handshake_address = get_engine_client_zmq_addr(
@@ -1353,7 +1357,12 @@ def launch_core_engines(
 
     if local_engines_only and dp_rank > 0:
         assert not handshake_local_only
-        local_handshake_address = get_open_zmq_ipc_path()
+        if os.name == "nt":
+            local_handshake_address = get_engine_client_zmq_addr(
+                handshake_local_only, host, get_open_port()
+            )
+        else:
+            local_handshake_address = get_open_zmq_ipc_path()
         client_handshake_address = local_handshake_address
     else:
         local_handshake_address = handshake_address
@@ -1421,24 +1430,53 @@ def wait_for_engine_startup(
         and not parallel_config.data_parallel_external_lb
     )
 
-    # 1. Engine processes
-    if isinstance(launch.engine_manager, CoreEngineProcManager):
-        for sentinel in launch.engine_manager.sentinels():
-            poller.register(sentinel, zmq.POLLIN)
-    # 2. DP Coordinator process, if present
+    # zmq_poll on Windows accepts only sockets: process sentinels (handles) and
+    # multiprocessing pipes fail with "not a socket". There, register only the
+    # handshake socket and check process liveness by hand after every poll.
+    is_windows = os.name == "nt"
     coord_process = launch.coordinator.proc if launch.coordinator else None
-    if coord_process is not None:
-        poller.register(coord_process.sentinel, zmq.POLLIN)
-    # 3. Watched frontend processes, if any
+    watched_frontends = list(launch.watched_frontend_processes)
     frontend_process_by_fd: dict[int, FrontendProcess] = {}
-    for proc in launch.watched_frontend_processes:
-        fd = proc.sentinel if isinstance(proc.sentinel, int) else proc.sentinel.fileno()
-        frontend_process_by_fd[fd] = proc
-        poller.register(fd, zmq.POLLIN)
+    if not is_windows:
+        # 1. Engine processes
+        if isinstance(launch.engine_manager, CoreEngineProcManager):
+            for sentinel in launch.engine_manager.sentinels():
+                poller.register(sentinel, zmq.POLLIN)
+        # 2. DP Coordinator process, if present
+        if coord_process is not None:
+            poller.register(coord_process.sentinel, zmq.POLLIN)
+        # 3. Watched frontend processes, if any
+        for proc in watched_frontends:
+            fd = (
+                proc.sentinel
+                if isinstance(proc.sentinel, int)
+                else proc.sentinel.fileno()
+            )
+            frontend_process_by_fd[fd] = proc
+            poller.register(fd, zmq.POLLIN)
 
+    def _any_process_exited() -> bool:
+        if isinstance(launch.engine_manager, CoreEngineProcManager) and (
+            launch.engine_manager.finished_procs()
+        ):
+            return True
+        if coord_process is not None and coord_process.exitcode is not None:
+            return True
+        return any(proc.exitcode is not None for proc in watched_frontends)
+
+    poll_period_ms = (
+        WINDOWS_STARTUP_POLL_PERIOD_MS if is_windows else STARTUP_POLL_PERIOD_MS
+    )
+    idle_ms = 0
     while any(conn_pending) or any(start_pending):
-        events = poller.poll(STARTUP_POLL_PERIOD_MS)
-        if not events:
+        events = poller.poll(poll_period_ms)
+        process_exited = is_windows and _any_process_exited()
+        if not events and not process_exited:
+            # Keep the waiting log at its usual cadence despite short polls.
+            idle_ms += poll_period_ms
+            if idle_ms < STARTUP_POLL_PERIOD_MS:
+                continue
+            idle_ms = 0
             if any(conn_pending):
                 logger.debug(
                     "Waiting for %d local, %d remote core engine proc(s) to connect.",
@@ -1450,7 +1488,8 @@ def wait_for_engine_startup(
                     *start_pending,
                 )
             continue
-        if len(events) > 1 or events[0][0] != handshake_socket:
+        idle_ms = 0
+        if process_exited or len(events) > 1 or events[0][0] != handshake_socket:
             # One of the local core, coordinator, or watched frontend processes exited.
             if isinstance(launch.engine_manager, CoreEngineProcManager):
                 finished = launch.engine_manager.finished_procs()
@@ -1458,11 +1497,15 @@ def wait_for_engine_startup(
                 finished = {}
             if coord_process is not None and coord_process.exitcode is not None:
                 finished[coord_process.name] = coord_process.exitcode
+            event_fds = {event_fd for event_fd, _ in events}
             failed_frontend_procs = {
                 proc.name: proc.exitcode
-                for fd, proc in frontend_process_by_fd.items()
+                for proc in watched_frontends
                 if proc.exitcode is not None
-                or any(event_fd == fd for event_fd, _ in events)
+                or any(
+                    fd in event_fds and p is proc
+                    for fd, p in frontend_process_by_fd.items()
+                )
             }
             if failed_frontend_procs and not finished:
                 raise RuntimeError(

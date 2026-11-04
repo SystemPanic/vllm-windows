@@ -27,17 +27,23 @@ if(DEEPGEMM_SRC_DIR)
   set(deepgemm_SOURCE_DIR "${DEEPGEMM_SRC_DIR}")
   message(STATUS "DeepGEMM using local DEEPGEMM_SRC_DIR: ${deepgemm_SOURCE_DIR}")
 else()
-  set(_DEEPGEMM_UPSTREAM_REPO "https://github.com/vllm-project/DeepGEMM.git")
-  # Pinned to the fork's dev branch: upstream's 26/09/30 release (2.8.1)
-  # plus the SM120 port, the SM90 paged-MQA kv_block=32/next_n=4 port,
-  # configurable SwiGLU alpha/beta, SiTU for FP8/FP4 Mega MoE, and NVFP4
-  # Mega MoE, plus swiglustep for BF16/FP8/NVFP4 Mega MoE and F8_128x4
-  # SFs for the FP8 einsum output (vllm-project/DeepGEMM#40), plus
-  # fp4_fp4_mega_moe and fused post-expert RMSNorm for Muse Spark Open
-  # (vllm-project/DeepGEMM#39), and the MX MegaMoE alignment fix
-  # (vllm-project/DeepGEMM#43).
-  # Uses the PyTorch 2.11 stable ABI and CPython 3.10 limited API.
-  set(_DEEPGEMM_UPSTREAM_TAG "0820030756945b2daec208e8e8255268360f337d")
+  # Keep in sync with tools/install_deepgemm.sh
+  if(WIN32)
+    set(_DEEPGEMM_UPSTREAM_REPO "https://github.com/SystemPanic/DeepGEMM-windows.git")
+    set(_DEEPGEMM_UPSTREAM_TAG "273ebde7e0fcb9719e3dd5aaa9c877d50efb1caa")
+  else()
+    set(_DEEPGEMM_UPSTREAM_REPO "https://github.com/vllm-project/DeepGEMM.git")
+    # Pinned to the fork's dev branch: upstream's 26/09/30 release (2.8.1)
+    # plus the SM120 port, the SM90 paged-MQA kv_block=32/next_n=4 port,
+    # configurable SwiGLU alpha/beta, SiTU for FP8/FP4 Mega MoE, and NVFP4
+    # Mega MoE, plus swiglustep for BF16/FP8/NVFP4 Mega MoE and F8_128x4
+    # SFs for the FP8 einsum output (vllm-project/DeepGEMM#40), plus
+    # fp4_fp4_mega_moe and fused post-expert RMSNorm for Muse Spark Open
+    # (vllm-project/DeepGEMM#39), and the MX MegaMoE alignment fix
+    # (vllm-project/DeepGEMM#43).
+    # Uses the PyTorch 2.11 stable ABI and CPython 3.10 limited API.
+    set(_DEEPGEMM_UPSTREAM_TAG "0820030756945b2daec208e8e8255268360f337d")
+  endif()
 
   set(_deepgemm_fc_root "${FETCHCONTENT_BASE_DIR}")
   if(NOT _deepgemm_fc_root)
@@ -63,6 +69,36 @@ else()
     )
   endif()
   message(STATUS "DeepGEMM is available at ${deepgemm_SOURCE_DIR}")
+  
+  if(WIN32)
+    find_package(Git REQUIRED)
+    set(_dg_cutlass_dir "${deepgemm_SOURCE_DIR}/third-party/cutlass")
+    set(_dg_cutlass_patch
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/windows_cutlass_memory_sm75.patch")
+
+    # If the patch reverses cleanly, it's already applied.
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" apply --reverse --check --ignore-whitespace
+              "${_dg_cutlass_patch}"
+      WORKING_DIRECTORY "${_dg_cutlass_dir}"
+      RESULT_VARIABLE _dg_patch_already
+      OUTPUT_QUIET ERROR_QUIET)
+
+    if(NOT _dg_patch_already EQUAL 0)
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace
+                "${_dg_cutlass_patch}"
+        WORKING_DIRECTORY "${_dg_cutlass_dir}"
+        RESULT_VARIABLE _dg_patch_rc
+        ERROR_VARIABLE _dg_patch_err)
+      if(NOT _dg_patch_rc EQUAL 0)
+        message(FATAL_ERROR
+          "Failed to apply ${_dg_cutlass_patch} to ${_dg_cutlass_dir}:\n"
+          "${_dg_patch_err}")
+      endif()
+      message(STATUS "Applied windows_cutlass_memory_sm75.patch to DeepGEMM CUTLASS")
+    endif()
+  endif()
 endif()
 
 # DeepGEMM requires CUDA 12.3+ for SM90, 12.9+ for SM100 (official upstream),
@@ -142,7 +178,8 @@ if(DEEPGEMM_ARCHS)
     COMPONENT _deep_gemm_C
     FILES_MATCHING
       PATTERN "_C.py"
-      PATTERN "_C_extension*.so")
+      PATTERN "_C_extension*.so"
+      PATTERN "_C_extension*.pyd")
 
   #
   # Vendor DeepGEMM Python package files

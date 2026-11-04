@@ -92,7 +92,17 @@ inline FastDiv makeFastDiv(int denom) {
   // device side selects on. Dividends stay below 2^31, which covers every slot
   // index this kernel can form.
   if (denom <= 1) return FastDiv{0u, 0u, 1};
+  
+#if defined(_WIN32) && defined(_M_ARM64)
+  // __lzcnt is x86/x64-only; ARM64 MSVC exposes CLZ as _CountLeadingZeros
+  int lg = 31 - _CountLeadingZeros(denom);
+#elif defined(_WIN32)
+  int lg = 31 - __lzcnt(denom);
+#else
   int lg = 31 - __builtin_clz(denom);
+#endif
+  
+  
   if ((1 << lg) < denom) lg++;
   uint32_t const p = 31 + static_cast<uint32_t>(lg);
   uint64_t const m = ((1ull << p) + static_cast<uint64_t>(denom) - 1) /

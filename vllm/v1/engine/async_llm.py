@@ -3,6 +3,7 @@
 import asyncio
 import os
 import socket
+import threading
 import time
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from copy import copy
@@ -136,6 +137,11 @@ class AsyncLLM(EngineClient):
 
         """
         configure_logging_if_needed(vllm_config.logging_config)
+
+        # Set by shutdown() before the engine is stopped, so the output handler
+        # can tell a deliberate shutdown from the engine actually dying. An
+        # Event because shutdown() may run on another thread than the loop.
+        self._shutdown_requested = threading.Event()
 
         # Ensure we can serialize custom transformer configs
         maybe_register_config_serialize_by_value()
@@ -304,6 +310,11 @@ class AsyncLLM(EngineClient):
 
     def shutdown(self, timeout: float | None = None) -> None:
         """Shutdown, cleaning up the background proc and IPC."""
+        # Must be set before engine_core.shutdown(): that marks the engine dead
+        # and closes its sockets while the output handler is still running.
+        if (shutdown_requested := getattr(self, "_shutdown_requested", None)) is not None:
+            shutdown_requested.set()
+
         shutdown_prometheus()
 
         if renderer := getattr(self, "renderer", None):
@@ -872,6 +883,7 @@ class AsyncLLM(EngineClient):
         # P0 multi-modal sender ("shadow") cache; None for text-only models.
         mm_processor_cache = renderer.mm_processor_cache
         chunk_size = envs.VLLM_V1_OUTPUT_PROC_CHUNK_SIZE
+        shutdown_requested = self._shutdown_requested
 
         async def output_handler():
             try:
@@ -938,6 +950,13 @@ class AsyncLLM(EngineClient):
                     logger.info(
                         "[Elastic EP] Retired rank stopped receiving EngineCore outputs"
                     )
+                    output_processor.propagate_error(e)
+                    return
+                if shutdown_requested.is_set() and isinstance(e, EngineDeadError):
+                    # Expected: shutdown() stopped the engine and closed its
+                    # sockets before cancelling this handler. Still fail any
+                    # in-flight requests, but this is not an error.
+                    logger.debug("AsyncLLM output_handler stopped by shutdown.")
                     output_processor.propagate_error(e)
                     return
                 logger.exception("AsyncLLM output_handler failed.")

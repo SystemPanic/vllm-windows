@@ -9,6 +9,10 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+#ifdef _MSC_VER
+  #define __FLT_MAX__ 3.402823466e+38F
+#endif
+
 namespace vllm {
 namespace topk_histogram_4096 {
 

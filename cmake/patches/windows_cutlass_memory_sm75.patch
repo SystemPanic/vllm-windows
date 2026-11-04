@@ -1,0 +1,43 @@
+diff --git a/include/cutlass/arch/memory_sm75.h b/include/cutlass/arch/memory_sm75.h
+index 040f7074..236de7db 100644
+--- a/include/cutlass/arch/memory_sm75.h
++++ b/include/cutlass/arch/memory_sm75.h
+@@ -238,6 +238,10 @@ template <typename AccessType>
+ struct shared_load_op<AccessType, 16> {
+   CUTLASS_DEVICE
+   shared_load_op(AccessType &D, void const *ptr) {
++  // PTX inline asm is only valid in the nvcc device pass. A pure host compiler
++  // (e.g. MSVC compiling a .cpp that includes CUTLASS) cannot parse GCC-style
++  // `asm volatile`, so fall back to a plain load there (never executed on host).
++  #if defined(__CUDA_ARCH__)
+     unsigned addr = cutlass_get_smem_pointer(ptr);
+ 
+     uint4 v;
+@@ -245,6 +249,9 @@ struct shared_load_op<AccessType, 16> {
+       "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w) : "r"(addr));
+ 
+     D = reinterpret_cast<AccessType const &>(v);
++  #else
++    D = *reinterpret_cast<AccessType const *>(ptr);
++  #endif
+   }
+ };
+ 
+@@ -254,6 +261,7 @@ template <typename AccessType>
+ struct shared_load_op<AccessType, 8> {
+   CUTLASS_DEVICE
+   shared_load_op(AccessType &D, void const *ptr) {
++  #if defined(__CUDA_ARCH__)
+     unsigned addr = cutlass_get_smem_pointer(ptr);
+ 
+     uint2 v;
+@@ -261,6 +269,9 @@ struct shared_load_op<AccessType, 8> {
+       "=r"(v.x), "=r"(v.y) : "r"(addr));
+ 
+     D = reinterpret_cast<AccessType const &>(v);
++  #else
++    D = *reinterpret_cast<AccessType const *>(ptr);
++  #endif
+   }
+ };
+ 

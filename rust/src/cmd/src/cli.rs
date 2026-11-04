@@ -14,6 +14,7 @@ mod unsupported;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU32;
+#[cfg(not(windows))]
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::{DefaultOnNull, OneOrMany, serde_as};
 use thiserror_ext::AsReport as _;
+#[cfg(not(windows))]
 use uuid::Uuid;
 use vllm_chat::GenerationConfigMode;
 use vllm_chat::ToolStrictLevel;
@@ -958,7 +960,8 @@ fn parse_runtime_args_json(value: &str) -> Result<SharedRuntimeArgs, String> {
 #[educe(Debug)]
 pub struct FrontendArgs {
     /// Inherited listening socket file descriptor passed by the Python
-    /// supervisor.
+    /// supervisor. On Windows this is the inherited SOCKET handle value, which
+    /// always fits in 32 bits.
     #[arg(long)]
     pub listen_fd: i32,
     /// Inherited gRPC listening socket file descriptor passed by the Python
@@ -1119,7 +1122,21 @@ fn effective_engine_reasoning_parser(selection: &ParserSelection, model: &str) -
     selection.resolve_reasoning_name(model).map(str::to_owned)
 }
 
+/// Allocate fresh local endpoints for one managed frontend instance.
+///
+/// On Windows the transport cannot adopt or reliably probe AF_UNIX sockets,
+/// so loopback TCP with kernel-assigned ports is used instead; the bound
+/// addresses are resolved and advertised to the engine during the handshake.
+#[cfg(windows)]
+fn frontend_ipc_addresses() -> (String, String) {
+    (
+        "tcp://127.0.0.1:0".to_string(),
+        "tcp://127.0.0.1:0".to_string(),
+    )
+}
+
 /// Allocate fresh IPC endpoints for one managed frontend instance.
+#[cfg(not(windows))]
 fn frontend_ipc_addresses() -> (String, String) {
     let preferred_base_path = std::env::var_os("VLLM_RPC_BASE_PATH")
         .map(PathBuf::from)

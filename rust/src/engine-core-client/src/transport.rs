@@ -4,9 +4,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+#[cfg(unix)]
+use std::os::fd::{FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener as StdUnixListener;
+#[cfg(windows)]
+use std::os::windows::io::{FromRawSocket, OwnedSocket};
 use std::time::Duration;
+
+/// Raw OS handle of a listening socket inherited from the Python supervisor.
+///
+/// On Unix this is a file descriptor passed via `Popen(pass_fds=...)`; on
+/// Windows it is a `SOCKET` handle inherited via
+/// `STARTUPINFO.lpAttributeList["handle_list"]`.
+///
+/// It is `i32` on every platform so the CLI and config types stay identical.
+/// Windows kernel handles (including base-provider SOCKETs) only use the low
+/// 32 bits so they can be shared with 32-bit processes; `adopt_listener`
+/// widens the value back to a `RawSocket`.
+pub type RawListener = i32;
 
 use bytes::Bytes;
 use enum_as_inner::EnumAsInner;
@@ -329,8 +345,8 @@ pub async fn connect_handshake(
 /// identities are synthesized from contiguous rank order instead of being
 /// discovered through a Rust-owned handshake.
 pub async fn connect_bootstrapped(
-    input_listener_fd: RawFd,
-    output_listener_fd: RawFd,
+    input_listener_fd: RawListener,
+    output_listener_fd: RawListener,
     engine_start_index: u32,
     engine_count: usize,
     ready_timeout: Duration,
@@ -393,7 +409,8 @@ pub async fn connect_bootstrapped(
     })
 }
 
-fn adopt_listener(fd: RawFd) -> Result<zeromq::Listener> {
+#[cfg(unix)]
+fn adopt_listener(fd: RawListener) -> Result<zeromq::Listener> {
     if fd < 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
         return Err(Error::InvalidClientConfig {
             message: format!("inherited ZMQ listener fd {fd} is not open"),
@@ -420,6 +437,52 @@ fn adopt_listener(fd: RawFd) -> Result<zeromq::Listener> {
 
     Err(Error::InvalidClientConfig {
         message: format!("unsupported inherited listener domain {domain:?}"),
+    })
+}
+
+#[cfg(windows)]
+fn adopt_listener(handle: RawListener) -> Result<zeromq::Listener> {
+    // Negative values include INVALID_SOCKET (-1 after truncation to 32 bits).
+    if handle < 0 {
+        return Err(Error::InvalidClientConfig {
+            message: format!("inherited ZMQ listener socket {handle} is invalid"),
+        });
+    }
+    let handle = handle as u32 as std::os::windows::io::RawSocket;
+
+    // Winsock must be initialized before any socket call. `from_raw_socket`
+    // does not do it, and nothing guarantees that std or tokio has touched
+    // the network yet in this process. Any std::net constructor runs
+    // WSAStartup exactly once; the throwaway socket is dropped immediately.
+    let _ = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0));
+
+    // SAFETY: the Python supervisor makes this handle inheritable and lists
+    // it in the child's handle_list. The bootstrapped startup path calls this
+    // function once per handle, transferring ownership to the listener below.
+    let socket: socket2::Socket = unsafe { OwnedSocket::from_raw_socket(handle) }.into();
+
+    // getsockname doubles as the validity check (WSAENOTSOCK if the handle
+    // was not inherited) and gives us the address family.
+    let domain = socket
+        .local_addr()
+        .map_err(|error| Error::InvalidClientConfig {
+            message: format!("inherited ZMQ listener socket {handle} is not usable: {error}"),
+        })?
+        .domain();
+
+    if domain == socket2::Domain::IPV4 || domain == socket2::Domain::IPV6 {
+        let listener: std::net::TcpListener = socket.into();
+        return Ok(listener.into());
+    }
+
+    // AF_UNIX exists on Windows 10 1803+, but std has no UnixListener there
+    // and zeromq's `Listener` has no conversion for it. The supervisor must
+    // use tcp:// endpoints on Windows.
+    Err(Error::InvalidClientConfig {
+        message: format!(
+            "unsupported inherited listener domain {domain:?} on Windows; \
+             use tcp:// endpoints instead of ipc://"
+        ),
     })
 }
 
@@ -641,12 +704,22 @@ pub async fn run_output_loop(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::fd::IntoRawFd;
+    #[cfg(windows)]
+    use std::os::windows::io::IntoRawSocket;
 
     use zeromq::RouterSocket;
     use zeromq::prelude::Socket;
 
-    use super::{adopt_listener, bind_local_sockets};
+    use super::{RawListener, adopt_listener, bind_local_sockets};
+
+    fn into_raw_listener(listener: std::net::TcpListener) -> RawListener {
+        #[cfg(unix)]
+        return listener.into_raw_fd();
+        #[cfg(windows)]
+        return i32::try_from(listener.into_raw_socket()).expect("socket handle fits in 32 bits");
+    }
 
     #[tokio::test]
     async fn bind_local_sockets_resolves_zero_port_bindings() {
@@ -666,7 +739,7 @@ mod tests {
 
         let endpoint = router
             .bind_listener(
-                adopt_listener(listener.into_raw_fd()).expect("adopt inherited listener fd"),
+                adopt_listener(into_raw_listener(listener)).expect("adopt inherited listener"),
             )
             .await
             .expect("bind inherited listener");
@@ -675,6 +748,7 @@ mod tests {
         assert!(router.close().await.is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn inherited_unix_listener_is_adopted_without_rebinding() {
         let path = std::env::temp_dir().join(format!(

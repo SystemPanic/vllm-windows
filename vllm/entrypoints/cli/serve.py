@@ -2,10 +2,19 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
+import os
 import signal
 import time
 
-import uvloop
+if os.name == "nt":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
 
 import vllm
 import vllm.envs as envs
@@ -59,7 +68,7 @@ class ServeSubcommand(CLISubcommand):
         if getattr(args, "grpc", False):
             from vllm.entrypoints.launchers.grpc_server import serve_grpc
 
-            uvloop.run(serve_grpc(args))
+            uvloop_impl.run(serve_grpc(args))
             return
 
         rust_frontend_path = (
@@ -153,7 +162,7 @@ class ServeSubcommand(CLISubcommand):
         else:
             # Single API server (this process).
             args.api_server_count = None
-            uvloop.run(run_server(args))
+            uvloop_impl.run(run_server(args))
 
     def validate(self, args: argparse.Namespace) -> None:
         validate_parsed_serve_args(args)

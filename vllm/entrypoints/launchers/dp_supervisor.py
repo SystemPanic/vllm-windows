@@ -19,7 +19,16 @@ from multiprocessing.process import BaseProcess
 import aiohttp
 import psutil
 import uvicorn
-import uvloop
+
+if os.name == "nt":
+    import winloop as uvloop_impl
+    # Windows does not support fork
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+    # Disable libuv on Windows by default
+    os.environ["USE_LIBUV"] = os.environ.get("USE_LIBUV", "0")
+else:
+    import uvloop as uvloop_impl
+
 from fastapi import FastAPI, Response
 
 import vllm.envs as envs
@@ -240,7 +249,7 @@ def _build_dp_supervisor_app(supervisor: DPSupervisor) -> FastAPI:
 def _run_python_vllm_dp_server(child_args: argparse.Namespace) -> None:
     from vllm.entrypoints.launchers.api_server.entry import run_server
 
-    uvloop.run(run_server(child_args))
+    uvloop_impl.run(run_server(child_args))
 
 
 def _run_rust_vllm_dp_server(child_args: argparse.Namespace) -> None:
@@ -561,4 +570,4 @@ class DPSupervisor:
 
 def run_dp_supervisor(args: argparse.Namespace) -> None:
     configure_logging_from_args(args)
-    uvloop.run(DPSupervisor(args).run())
+    uvloop_impl.run(DPSupervisor(args).run())

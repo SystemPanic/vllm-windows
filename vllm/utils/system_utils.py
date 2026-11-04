@@ -8,7 +8,6 @@ import ctypes
 import logging
 import multiprocessing
 import os
-import signal
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -227,8 +226,35 @@ def decorate_logs(
     set_vllm_process_name(process_name, skip_if_set=skip_if_decorated)
 
 
+def _force_kill(proc: psutil.Process) -> None:
+    """Force-kill one process, tolerating processes that are already gone.
+
+    On Windows this is TerminateProcess, which fails with "access denied"
+    (WinError 5) when the target is already exiting or has exited but its
+    handle is still held open, the normal state right after a graceful
+    shutdown. Only report it if the process is genuinely still running.
+    """
+    try:
+        proc.kill()  # SIGKILL on POSIX, TerminateProcess on Windows
+    except psutil.NoSuchProcess:
+        return
+    except (psutil.AccessDenied, PermissionError):
+        try:
+            still_running = proc.is_running() and (
+                proc.status() != psutil.STATUS_ZOMBIE
+            )
+        except psutil.Error:
+            still_running = False
+        if still_running:
+            logger.warning(
+                "[shutdown] could not force kill pid %d: access denied", proc.pid
+            )
+
+
 def kill_process_tree(pid: int):
-    """Kills all descendant processes of the given pid by sending SIGKILL.
+    """Kills the given pid and all its descendant processes.
+
+    Uses SIGKILL on POSIX and TerminateProcess on Windows.
 
     Args:
         pid (int): Process ID of the parent process
@@ -240,21 +266,23 @@ def kill_process_tree(pid: int):
         return
 
     # Get all children recursively
-    children = parent.children(recursive=True)
+    try:
+        children = parent.children(recursive=True)
+    except psutil.Error:
+        children = []
 
-    # Send SIGKILL to all children first
+    # Kill all children first
     for child in children:
-        with contextlib.suppress(ProcessLookupError, psutil.NoSuchProcess):
+        with contextlib.suppress(psutil.Error):
             logger.warning(
                 "[shutdown] force killing sub process %s pid %d",
                 child.name(),
                 child.pid,
             )
-            os.kill(child.pid, signal.SIGKILL)
+        _force_kill(child)
 
     # Finally kill the parent
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGKILL)
+    _force_kill(parent)
 
 
 # Resource utilities
@@ -300,15 +328,62 @@ def find_loaded_libraries(lib_name: str) -> list[str]:
     # address rather than load order, so a substring hit is a
     # nondeterministic hijack.
     paths: dict[str, None] = {}
-    with open("/proc/self/maps") as f:
-        for line in f:
-            start = line.find("/")
-            if start == -1:
-                continue
-            path = line[start:].strip()
-            filename = path.rsplit("/", maxsplit=1)[-1]
-            if filename.startswith((f"{lib_name}.", f"{lib_name}-")):
-                paths[path] = None
+    if os.name != "nt":
+        with open("/proc/self/maps") as f:
+            for line in f:
+                start = line.find("/")
+                if start == -1:
+                    continue
+                path = line[start:].strip()
+                filename = path.rsplit("/", maxsplit=1)[-1]
+                if filename.startswith((f"{lib_name}.", f"{lib_name}-")):
+                    paths[path] = None
+    elif "cudart" in lib_name:
+        import torch
+        cudart_path = os.getenv("VLLM_CUDART_SO_PATH", None)
+        if cudart_path is None:
+            cuda_path = None
+            if os.environ.get("CUDA_HOME", None):
+                cuda_path = os.environ.get("CUDA_HOME")
+            elif os.environ.get("CUDA_ROOT", None):
+                cuda_path = os.environ.get("CUDA_ROOT")
+            elif os.environ.get("CUDA_PATH"):
+                cuda_path = os.environ.get("CUDA_PATH", None)
+
+            cuda_major_version = torch.version.cuda.split(
+                '.')[0] if torch.version.cuda else "12"
+            if cuda_major_version < "12":
+                cuda_major_version += "0"
+            if cuda_path:
+                import platform
+                dll_bin_path = os.path.join(cuda_path, "bin")
+                arch_dir = ("arm64" if platform.machine().lower() in ("arm64", "aarch64")
+                            else "x64")
+                if os.path.exists(os.path.join(cuda_path, "bin", arch_dir)):
+                    dll_bin_path = os.path.join(cuda_path, "bin", arch_dir)
+                cudart_path = os.path.abspath(
+                    os.path.join(dll_bin_path, f"cudart64_{cuda_major_version}.dll"))
+            else:
+                from shutil import which
+                nvcc_path = which("nvcc")
+                if nvcc_path:
+                    cudart_path = os.path.abspath(
+                        os.path.join(nvcc_path, f"cudart64_{cuda_major_version}.dll"))
+            if cudart_path:
+                os.environ["VLLM_CUDART_SO_PATH"] = cudart_path
+                logger.info('VLLM_CUDART_SO_PATH resolved to %s', cudart_path)
+            else:
+                raise ValueError(
+                    'VLLM_CUDART_SO_PATH is not set. '
+                    'VLLM_CUDART_SO_PATH need to be set with the absolute path '
+                    'to cudart dll on Windows (for example, set '
+                    'VLLM_CUDART_SO_PATH=C:\\CUDA\\v12.4\\bin\\cudart64_12.dll)'
+                )
+        paths[cudart_path] = None
+    elif "cumem_allocator" in lib_name:
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
+                            'cumem_allocator.pyd'))
+        paths[path] = None
     return list(paths)
 
 

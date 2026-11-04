@@ -21,6 +21,7 @@ def is_cutedsl_available(kernel_name: str) -> bool:
     try:
         import cutlass  # noqa: F401
         import cutlass.cute  # noqa: F401
+        from quack.compile_utils import make_fake_tensor  # noqa: F401
 
         _cutedsl_available = True
     except ImportError:

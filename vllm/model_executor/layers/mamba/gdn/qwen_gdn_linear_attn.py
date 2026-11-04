@@ -128,6 +128,55 @@ def xpu_gdn_kernel_available() -> bool:
     return hasattr(torch.ops._xpu_C, "gdn_attention")
 
 
+@functools.cache
+def _flashinfer_gdn_prefill_params() -> frozenset[str] | None:
+    """Keyword parameters accepted by the installed FlashInfer GDN prefill.
+
+    Returns ``None`` when ``flashinfer.gdn_prefill`` cannot be imported.
+
+    Older FlashInfer releases (e.g. the 0.6.x builds pinned on Windows ARM64,
+    where CuTeDSL is not available) ship a Hopper-only CUTLASS kernel whose
+    ``chunk_gated_delta_rule`` has no ``backend``, ``use_cp`` or
+    ``state_checkpoints`` arguments. Newer releases add a CuTeDSL backend
+    (needed for Blackwell) plus context-parallel and checkpoint outputs.
+    """
+    try:
+        import inspect
+
+        from flashinfer.gdn_prefill import chunk_gated_delta_rule
+    except Exception:
+        return None
+    try:
+        sig = inspect.signature(chunk_gated_delta_rule)
+    except (TypeError, ValueError):
+        return frozenset()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        # Accepts **kwargs: assume the modern API.
+        return frozenset(sig.parameters) | {
+            "backend",
+            "use_cp",
+            "state_checkpoints",
+            "checkpoint_cu_starts",
+            "checkpoint_every_n_tokens",
+        }
+    return frozenset(sig.parameters)
+
+
+def _flashinfer_gdn_has_modern_api() -> bool:
+    """Whether FlashInfer exposes the multi-backend (CuTeDSL) GDN prefill."""
+    params = _flashinfer_gdn_prefill_params()
+    return params is not None and "backend" in params
+
+
+def _flashinfer_gdn_supports_checkpoints() -> bool:
+    params = _flashinfer_gdn_prefill_params()
+    return params is not None and {
+        "state_checkpoints",
+        "checkpoint_cu_starts",
+        "checkpoint_every_n_tokens",
+    } <= params
+
+
 def _aiter_flydsl_unsupported_reasons(
     vllm_config: VllmConfig, head_k_dim: int | None, head_v_dim: int | None
 ) -> list[str]:
@@ -245,15 +294,21 @@ def _resolve_gdn_prefill_backend(
 
     supports_flashinfer = False
     supports_cutedsl = False
+    fi_params = _flashinfer_gdn_prefill_params()
+    fi_available = fi_params is not None
+    # Blackwell GDN prefill in FlashInfer is the CuTeDSL backend, which only
+    # exists in releases whose API takes ``backend=``. Older builds (e.g. the
+    # Windows ARM64 pin) ship the Hopper-only kernel.
+    fi_blackwell = _flashinfer_gdn_has_modern_api()
 
     if current_platform.is_device_capability(90):
-        supports_flashinfer = True
+        supports_flashinfer = fi_available
     elif (
         current_platform.is_device_capability_family(100)
         and head_k_dim == 128
         and current_platform.get_cuda_runtime_major() >= 13
     ):
-        supports_flashinfer = True
+        supports_flashinfer = fi_blackwell
         supports_cutedsl = True
     elif (
         current_platform.is_device_capability_family(120)
@@ -261,7 +316,23 @@ def _resolve_gdn_prefill_backend(
         and current_platform.get_cuda_runtime_major() >= 13
     ):
         # The in-tree CuteDSL kernel targets SM100 only, so it stays off here.
-        supports_flashinfer = True
+        supports_flashinfer = fi_blackwell
+
+    if (
+        backend in ["flashinfer", "auto"]
+        and not supports_flashinfer
+        and fi_available
+        and not fi_blackwell
+        and (
+            current_platform.is_device_capability_family(100)
+            or current_platform.is_device_capability_family(120)
+        )
+    ):
+        logger.info_once(
+            "Installed FlashInfer has the legacy GDN prefill API (no "
+            "'backend' argument, Hopper-only); using Triton/FLA GDN prefill "
+            "on this Blackwell GPU instead."
+        )
 
     if backend in ["flashinfer", "auto"] and supports_flashinfer:
         return backend, "flashinfer"
@@ -345,6 +416,28 @@ def fi_chunk_gated_delta_rule(
     fi_beta = beta.to(torch.float32)
     if cu_seqlens is not None:
         cu_seqlens = cu_seqlens.to(torch.int64)
+
+    # Newer FlashInfer releases add backend/use_cp/checkpoint arguments; older
+    # ones (e.g. 0.6.x pinned where CuTeDSL is unavailable) reject them.
+    fi_params = _flashinfer_gdn_prefill_params() or frozenset()
+    extra_kwargs: dict[str, object] = {}
+    if "backend" in fi_params:
+        extra_kwargs["backend"] = "flashinfer"
+    if "use_cp" in fi_params:
+        extra_kwargs["use_cp"] = use_cp
+    if state_checkpoints is not None:
+        if not _flashinfer_gdn_supports_checkpoints():
+            raise RuntimeError(
+                "The installed FlashInfer GDN prefill does not support "
+                "state checkpoints; upgrade FlashInfer or disable "
+                "mamba_cache_mode='align'."
+            )
+        extra_kwargs.update(
+            state_checkpoints=state_checkpoints,
+            checkpoint_cu_starts=checkpoint_cu_starts,
+            checkpoint_every_n_tokens=checkpoint_every_n_tokens,
+        )
+
     result = chunk_gated_delta_rule_fi(
         q=q,
         k=k,
@@ -354,11 +447,7 @@ def fi_chunk_gated_delta_rule(
         initial_state=fi_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
-        state_checkpoints=state_checkpoints,
-        checkpoint_cu_starts=checkpoint_cu_starts,
-        checkpoint_every_n_tokens=checkpoint_every_n_tokens,
-        use_cp=use_cp,
-        backend="flashinfer",
+        **extra_kwargs,
     )
     # FlashInfer returns (output, state) when output_final_state=True,
     # or just output when output_final_state=False.
@@ -692,6 +781,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         if (
             vllm_config.cache_config.mamba_cache_mode == "align"
             and self.gdn_prefill_backend == "flashinfer"
+            and _flashinfer_gdn_supports_checkpoints()
         ):
             self._checkpoint_alignment = FLASHINFER_GDN_CHECKPOINT_ALIGNMENT
             self._max_num_batched_tokens = (
@@ -1471,8 +1561,13 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             checkpoint_buffers.append(state_checkpoints[:1])
         cu_seqlens = torch.tensor([0, q.shape[1]], device=q.device, dtype=torch.int32)
         checkpoint_cu_starts = torch.tensor([0, 1], device=q.device)
+        fi_params = _flashinfer_gdn_prefill_params() or frozenset()
+        # Legacy FlashInfer has a single (non-CP) route; warm it once.
+        cp_modes: tuple[Literal["auto"] | bool, ...] = (
+            ("auto", False) if "use_cp" in fi_params else (False,)
+        )
         for use_cp, state_checkpoints in itertools.product(
-            ("auto", False), checkpoint_buffers
+            cp_modes, checkpoint_buffers
         ):
             has_checkpoint = state_checkpoints is not None
             fi_chunk_gated_delta_rule(
