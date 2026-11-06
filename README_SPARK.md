@@ -12,29 +12,42 @@ If none of these are present, make sure to set the environment variable before s
 Some RTX Spark vLLM dependencies are tricky to install due to the recent release of the platform. Follow the steps to correctly install them the first time before using or building vLLM:
 
 1. Open a Command Line (cmd.exe) and execute ```VISUAL_STUDIO_INSTALL_PATH\VC\Auxiliary\Build\vcvarsall.bat arm64```
-2. Install python 3.14
-3. Torch does not have official wheels yet for cuda windows arm64, use nvidia repo: 
+2. Install python 3.14, then basic build dependencies: ``pip install ninja cmake``
+3. Torch does not have official wheels for cuda windows arm64 yet, use nvidia repo: 
 ``pip install torch==2.14.0+cu134 torchvision==0.29.0+cu134 torchaudio==2.11.0+cu134 --extra-index-url https://pypi.nvidia.com/nvtorch_oot/``
-4. After torch install, execute this: python -c "import torch.utils.cpp_extension as c; print(c.__file__)"
+4. After torch install, execute this: ``python -c "import torch.utils.cpp_extension as c; print(c.__file__)"``
 5. open the printed cpp_extension.py path and replace all 'x64' entries with 'arm64', then save cpp_extension.py changes
-6. xformers installation:
+6. Download and install rust at default location: https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+7. Add rust bin folder to Windows PATH env var with:
+```
+setx PATH %PATH%;%USERPROFILE%\.cargo\bin
+set PATH=%PATH%;%USERPROFILE%\.cargo\bin
+```
+8. Download https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip and unzip it to C:\ffmpeg-8.1
+9. Download [FFmpegBtbNConfig.cmake](https://github.com/SystemPanic/vllm-windows/releases/download/v0.32.0_spark/FFmpegBtbNConfig.cmake) to C:\ffmpeg-8.1\FFmpegBtbNConfig.cmake
+10. Add C:\ffmpeg-8.1\bin to Windows PATH env var with:
+```
+setx PATH %PATH%;C:\ffmpeg-8.1\bin
+set PATH=%PATH%;C:\ffmpeg-8.1\bin
+```
+11. Check that ``rustc --version`` and ``ffmpeg -version`` have executed correctly
+12. xformers installation:
 ```set TORCH_CUDA_ARCH_LIST=12.1
 set MAX_JOBS=18
 set CMAKE_GENERATOR=Ninja
 pip install --no-build-isolation -v xformers
 ```
-7. cryptography installation:
+13. cryptography installation:
 ```
 git clone https://github.com/microsoft/vcpkg C:\vcpkg
 C:\vcpkg\bootstrap-vcpkg.bat
 C:\vcpkg\vcpkg install openssl:arm64-windows-static-md
+setx OPENSSL_DIR C:\vcpkg\installed\arm64-windows-static-md
 set OPENSSL_DIR=C:\vcpkg\installed\arm64-windows-static-md
 pip install cryptography
 ```
-8. outlines_core installation:
+14. outlines_core installation:
 ```
-# Download and install rust: https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
-# Add rustc.exe and cargo.exe folder to Windows PATH (default path is C:\Users\YOUR_WINDOWS_USER\.cargo\bin), then close and open again the VC console (step 1).
 mkdir C:\b
 set TEMP=C:\b
 set TMP=C:\b
@@ -43,20 +56,14 @@ set AWS_LC_SYS_CMAKE_GENERATOR=Ninja
 set CC=clang-cl
 set CXX=clang-cl
 pip install outlines_core --no-cache-dir --no-build-isolation
-```
-9. Unset temporal build env vars:
-```
 set CARGO_TARGET_DIR=
 set TMP=
 set TEMP=
 set CC=
 set CXX=
 ```
-10. ffmpeg and opencv installation:
+15. opencv-python-headless installation:
 ```
-# Download https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip and unzip it to C:\ffmpeg-8.1
-# Download FFmpegBtbNConfig.cmake from the vLLM for Windows latest release to C:\ffmpeg-8.1
-# Add ffmpeg exe and dll's folder C:\ffmpeg-8.1\bin to PATH, then close and open again the VC console  (step 1).
 set CMAKE_ARGS=-DOPENCV_BIN_INSTALL_PATH=bin -DBUILD_WITH_STATIC_CRT=OFF -DWITH_FFMPEG=ON -DOPENCV_FFMPEG_SKIP_DOWNLOAD=ON -DVIDEOIO_PLUGIN_LIST=ffmpeg -DOPENCV_FFMPEG_USE_FIND_PACKAGE=FFmpegBtbN -DFFmpegBtbN_DIR=C:/ffmpeg-8.1
 pip install opencv-python-headless==4.14.0.94
 # Fix opencv dll name mismatch on arm64 (always do this after installing or reinstalling opencv-python-headless):
@@ -84,8 +91,8 @@ set TORCH_CUDA_ARCH_LIST=12.1
 set MAX_JOBS=10
 set NVCC_THREADS=1
 set USE_CUDNN=1
-set SETUPTOOLS_SCM_PRETEND_VERSION=0.32.0
+set SETUPTOOLS_SCM_PRETEND_VERSION=0.33.0+spark
 python setup.py bdist_wheel
 
-cd dist & pip install vllm-0.32.0.cu134-cp314-cp314-win_arm64.whl
+cd dist & pip install vllm-0.33.0+spark.cu134-cp314-cp314-win_arm64.whl
 ```
