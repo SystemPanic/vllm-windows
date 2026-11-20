@@ -209,7 +209,10 @@ _DLManagedTensor._fields_ = [
 _PyCapsule_New = ctypes.PYFUNCTYPE(
     ctypes.py_object, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p
 )(("PyCapsule_New", ctypes.pythonapi))
-_malloc = ctypes.CDLL(None).malloc
+if sys.platform == "win32":
+    _malloc = ctypes.CDLL("ucrtbase").malloc
+else:
+    _malloc = ctypes.CDLL(None).malloc
 _malloc.restype = ctypes.c_void_p
 _malloc.argtypes = [ctypes.c_size_t]
 

@@ -120,8 +120,8 @@ To patch, open an elevated command line (execute cmd.exe as Administrator), and 
 
 7. Build & install:
 ```
-#Install torch 2.11 CUDA 13 (change cu130 with your installed CUDA version)
-pip install torch==2.11+cu130 torchaudio==2.11+cu130 torchvision==0.26.0+cu130 --index-url https://download.pytorch.org/whl/cu130
+#Install torch 2.14 CUDA 13 (change cu132 with your installed CUDA version)
+pip install torch==2.14.1+cu132 torchaudio==2.11.1+cu132 torchvision==0.29.1+cu132 --index-url https://download.pytorch.org/whl/cu132
 
 pip install -r requirements/build/cuda.txt
 pip install -r requirements/cuda.txt

@@ -56,7 +56,7 @@ oss-harmony >= 0.0.11  # Required for gpt-oss; includes embedded vocabularies
 anthropic >= 0.71.0
 model-hosting-container-standards >= 0.1.14, < 1.0.0
 mcp >= 2.2.0, < 3.0.0
-opentelemetry-sdk >= 1.45.1; sys_platform != "win32" or platform_machine != 'ARM64'
-opentelemetry-api >= 1.45.1; sys_platform != "win32" or platform_machine != 'ARM64'
-opentelemetry-exporter-otlp >= 1.45.1; sys_platform != "win32" or platform_machine != 'ARM64'
-opentelemetry-semantic-conventions-ai >= 0.4.1; sys_platform != "win32" or platform_machine != 'ARM64'
+opentelemetry-sdk >= 1.45.1
+opentelemetry-api >= 1.45.1
+opentelemetry-exporter-otlp >= 1.45.1; sys_platform != "win32" or platform_machine != 'ARM64' #grpcio not available on Windows ARM64
+opentelemetry-semantic-conventions-ai >= 0.4.1

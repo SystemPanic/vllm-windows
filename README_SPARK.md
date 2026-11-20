@@ -75,7 +75,7 @@ Now you are ready to install vLLM or build it.
 - Install vLLM:
 1. Ensure that you have the correct Python, Torch and CUDA version of the wheel. The Python, Torch and CUDA version of the wheel is specified in the release version.
 2. Download the wheel from the release version of your preference (latest wheel [here](https://github.com/SystemPanic/vllm-windows/releases/latest)).
-3. Install it with ``pip install DOWNLOADED_WHEEL_PATH``
+3. Install it with ``pip install DOWNLOADED_WHEEL_PATH --no-build-isolation``
 
 - Build vLLM from source:
 ```
@@ -94,5 +94,5 @@ set USE_CUDNN=1
 set SETUPTOOLS_SCM_PRETEND_VERSION=0.33.0+spark
 python setup.py bdist_wheel
 
-cd dist & pip install vllm-0.33.0+spark.cu134-cp314-cp314-win_arm64.whl
+cd dist & pip install vllm-0.33.0+spark.cu134-cp314-cp314-win_arm64.whl --no-build-isolation
 ```

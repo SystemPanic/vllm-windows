@@ -1632,6 +1632,7 @@ elseif(VLLM_GPU_LANG STREQUAL "HIP")
     # extern declarations in the header).
     target_compile_definitions(_moe_C_stable_libtorch PRIVATE
       ${TOPK_WAVE_ONLY_DEFINE})
+  endif()
   if(WIN32)
     target_link_libraries(_moe_C_stable_libtorch PRIVATE ${CUDA_TOOLKIT_ROOT_DIR}/lib/x64/cublas.lib)
   endif()

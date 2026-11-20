@@ -156,7 +156,7 @@ __global__ void silu_and_mul_per_block_quant_vec_kernel(
         fmaxf(local_max, VLLM_SHFL_XOR_SYNC_WIDTH(local_max, off, kLanes));
   }
 
-  float group_scale = local_max / quant_type_max_v<scalar_out_t>;
+  float group_scale = local_max / quant_type_max<scalar_out_t>::val();
   if (scale_ub != nullptr) {
     group_scale = fminf(group_scale, *scale_ub);
   }
