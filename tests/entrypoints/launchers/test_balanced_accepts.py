@@ -9,11 +9,16 @@ import multiprocessing
 import os
 import socket
 import ssl
+import sys
 from collections import Counter
 
 import pytest
 import uvicorn
-import uvloop
+
+if sys.platform == "win32":
+    import winloop as uvloop_impl
+else:
+    import uvloop as uvloop_impl
 
 from vllm.entrypoints.launchers.launcher import NoSignalServer
 
@@ -80,7 +85,11 @@ async def _serve(sock, requests, loads=None, **config_kwargs):
 
 
 def _run(coro, loop_impl):
-    return uvloop.run(coro) if loop_impl == "uvloop" else asyncio.run(coro)
+    if loop_impl == "uvloop":
+        return uvloop_impl.run(coro)
+    # Balanced accepts uses add_reader, which Windows' Proactor loop lacks.
+    with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+        return runner.run(coro)
 
 
 @pytest.mark.parametrize("loop_impl", ["asyncio", "uvloop"])
@@ -138,7 +147,7 @@ def test_tls_handshake_failure_keeps_serving(tmp_path):
         writer.close()
         return await _get(port, ssl_ctx=client_ctx)
 
-    bodies = uvloop.run(
+    bodies = uvloop_impl.run(
         _serve(_bound_socket(), requests, ssl_keyfile=keyfile, ssl_certfile=certfile)
     )
     assert bodies == [str(os.getpid()).encode()]
@@ -155,7 +164,7 @@ def test_busier_worker_still_serves():
         writer.close()
         return bodies
 
-    assert uvloop.run(_serve(_bound_socket(), requests, loads)) == [
+    assert uvloop_impl.run(_serve(_bound_socket(), requests, loads)) == [
         str(os.getpid()).encode()
     ]
 
@@ -172,8 +181,8 @@ def _worker(sock, loads, index, ready, stop):
         server.should_exit = True
         await task
 
-    # API workers run on uvloop, whose own server accepts a whole burst at once.
-    uvloop.run(main())
+    # Use the same libuv loop as the API workers.
+    uvloop_impl.run(main())
 
 
 @pytest.mark.skipif((os.cpu_count() or 1) < 8, reason="needs idle cores per worker")
@@ -205,7 +214,7 @@ def test_connections_balanced_over_workers(arrival_s):
             results = await asyncio.gather(*(get_after(d) for d in delays))
             return Counter(body for (body,) in results)
 
-        counts = uvloop.run(arrive())
+        counts = uvloop_impl.run(arrive())
         assert sum(counts.values()) == connections
         # Fair share is 100.
         assert max(counts.values()) <= 5 * connections // (4 * workers), counts
