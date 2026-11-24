@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Request-time validation of structured output requests."""
 
-import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -147,6 +146,17 @@ def _nested_array_schema(levels: int) -> str:
     )
 
 
+def _nested_array_schema_dict(levels: int) -> dict[str, object]:
+    # json.loads() uses a C recursion limit separate from sys.getrecursionlimit().
+    # The 2,000-level fixture fit within the Linux x86-64 runner's limit
+    # (10,000 on CPython 3.12.16) but exceeded the Windows ARM64 runner's
+    # (1,000 on CPython 3.13.17). Build the dict directly so pytest can collect it.
+    schema: dict[str, object] = {"type": "string"}
+    for _ in range(levels - 1):
+        schema = {"type": "array", "items": schema}
+    return schema
+
+
 def _structural_tag(schema: str) -> str:
     return (
         '{"type": "structural_tag", "format": {"type": "json_schema", '
@@ -162,7 +172,7 @@ def _structural_tag(schema: str) -> str:
             id="json-str-over-limit",
         ),
         pytest.param(
-            {"json": json.loads(_nested_array_schema(2_000))},
+            {"json": _nested_array_schema_dict(2_000)},
             id="json-dict-past-recursion-limit",
         ),
         pytest.param(
