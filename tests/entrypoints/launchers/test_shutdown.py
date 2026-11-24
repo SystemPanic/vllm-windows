@@ -198,7 +198,15 @@ async def test_shutdown_on_engine_failure(tmp_path: Path):
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN),
+            preexec_fn=(
+                None
+                if sys.platform == "win32"
+                else lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
+            ),
+            # Windows disables Ctrl+C in a new process group.
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+            ),
         )
 
     # Wait for server startup
