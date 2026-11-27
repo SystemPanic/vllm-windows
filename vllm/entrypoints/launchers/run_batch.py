@@ -403,7 +403,8 @@ async def open_batch_input(
 
         # JSON allows a bare "\r" as whitespace, so split lines on "\n" only.
         source = stack.enter_context(open(path_or_url, encoding="utf-8", newline="\n"))
-        if source.seekable():
+        # Windows pipes can report seekable even though they cannot be rewound.
+        if source.seekable() and not stat.S_ISFIFO(os.fstat(source.fileno()).st_mode):
             yield source
             return
 
@@ -501,15 +502,24 @@ async def batch_output_writer(
             yield f
         return
 
-    with staging_file(output_tmp_dir, "tmp_batch_output_") as f:
-        yield f
-        f.flush()
-        logger.info("Uploading outputs to %s", path_or_url)
-        if isinstance(f, StringIO):
-            data = f.getvalue().strip().encode("utf-8")
-            await upload_data(path_or_url, data, from_file=False)
+    with contextlib.ExitStack() as stack:
+        data: str | bytes
+        if output_tmp_dir is None:
+            with StringIO() as buffer:
+                yield buffer
+                data = buffer.getvalue().strip().encode("utf-8")
         else:
-            await upload_data(path_or_url, f.name, from_file=True)
+            staging_dir = stack.enter_context(
+                tempfile.TemporaryDirectory(
+                    dir=output_tmp_dir, prefix="tmp_batch_output_"
+                )
+            )
+            data = os.path.join(staging_dir, "output.jsonl")
+            with open(data, "w", encoding="utf-8", newline="\n") as output_file:
+                yield output_file
+
+        logger.info("Uploading outputs to %s", path_or_url)
+        await upload_data(path_or_url, data, from_file=output_tmp_dir is not None)
 
 
 async def download_bytes_from_url(

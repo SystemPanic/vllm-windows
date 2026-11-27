@@ -279,6 +279,8 @@ vllm run-batch \
     --model meta-llama/Meta-Llama-3-8B-Instruct
 ```
 
+For an HTTPS output URL that accepts `PUT`, use `--output-tmp-dir` to stage responses on disk instead of in memory. The upload starts after the batch finishes, and the staged file is removed even if the upload fails.
+
 See [vllm run-batch](./run-batch.md) for the full reference of all available arguments.
 
 ## preload

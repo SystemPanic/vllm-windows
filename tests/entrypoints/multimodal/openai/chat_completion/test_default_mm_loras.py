@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import json
 import os
 
 import openai  # use the official client for correctness check
@@ -45,7 +46,7 @@ def multimodal_server():
         "--gpu-memory-utilization",
         "0.8",
         "--default-mm-loras",
-        f'{{"audio": "{AUDIO_LORA_PATH}"}}',
+        json.dumps({"audio": AUDIO_LORA_PATH}),
     ]
 
     with RemoteOpenAIServer(
